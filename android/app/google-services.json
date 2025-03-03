@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "570111942807",
+    "project_id": "concord-cc2fb",
+    "storage_bucket": "concord-cc2fb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:570111942807:android:559b1afc880846c90c89d2",
+        "android_client_info": {
+          "package_name": "com.concord.concord"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBAzDKPa_J70tdNoXVjpriAKQbaSHV1YEo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
