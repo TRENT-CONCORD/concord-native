@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'profile_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -34,12 +35,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
       });
 
       try {
-        await _authService.registerWithEmailAndPassword(
+        final user = await _authService.registerWithEmailAndPassword(
           email: _emailController.text.trim(),
           password: _passwordController.text.trim(),
         );
         if (mounted) {
-          Navigator.pushReplacementNamed(context, '/home');
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ProfileScreen(
+                uid: user.uid,
+              ),
+            ),
+          );
         }
       } catch (e) {
         setState(() {
