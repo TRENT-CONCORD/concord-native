@@ -59,23 +59,25 @@ module.exports = async function (context, req) {
             }
 
             // Create ZIP deployment
-            const deploymentUrl = await createDeploymentPackage(branch, context);
+            const { zipUrl, folderPath } = await createDeploymentPackage(branch, context);
             
             // Deploy based on branch
             if (branch === 'sandbox') {
                 await deployToAzureWebApp(
                     'concord-dev',
                     'concord-api-dev',
-                    deploymentUrl,
-                    tokenCredential,
+                    zipUrl,
+                    folderPath,
+                    process.env.SANDBOX_SUBSCRIPTION_ID || 'ff42a815-661f-4e1f-867b-6a99ca790307',
                     context
                 );
             } else {
                 await deployToAzureWebApp(
                     'concord-prod',
                     'concord-api',
-                    deploymentUrl,
-                    tokenCredential,
+                    zipUrl,
+                    folderPath,
+                    process.env.MAIN_SUBSCRIPTION_ID || 'unknown',
                     context
                 );
             }
@@ -102,34 +104,83 @@ module.exports = async function (context, req) {
 
 // Function to create a deployment package from GitHub
 async function createDeploymentPackage(branch, context) {
-    // We'll use GitHub API to directly get a downloadable ZIP of the backend directory
+    // We'll use GitHub API to directly get the backend folder
     const repoOwner = 'TRENT-CONCORD';
     const repoName = 'concord-native';
     const githubToken = process.env.GITHUB_TOKEN;
     
-    // Get archive link from GitHub API
-    const archiveUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/zipball/${branch}`;
-    
-    context.log(`Creating deployment package from: ${archiveUrl}`);
-    
-    // Note: We return the URL of the ZIP file from GitHub
-    // In a real implementation, we might want to download, extract, and repackage just the backend folder
-    return archiveUrl;
-}
-
-// Function to deploy to Azure Web App
-async function deployToAzureWebApp(resourceGroup, webAppName, deploymentPackageUrl, token, context) {
-    // For deployment to Azure App Service using a ZIP URL
-    const deploymentEndpoint = `https://management.azure.com/subscriptions/${getSubscriptionId(resourceGroup)}/resourceGroups/${resourceGroup}/providers/Microsoft.Web/sites/${webAppName}/extensions/zipdeploy?api-version=2021-02-01`;
-    
-    context.log(`Deploying to ${webAppName} in ${resourceGroup}`);
+    context.log(`Creating deployment package for branch: ${branch}`);
     
     try {
-        // In a real implementation, we would make a POST request to the deployment endpoint
-        // with the deploymentPackageUrl and proper authentication
-        context.log(`Simulated deployment to: ${deploymentEndpoint}`);
+        // In a real implementation, we would:
+        // 1. Clone the repo using REST API or Git library
+        // 2. Create a ZIP package of just the backend folder
+        // 3. Upload the ZIP to an Azure Blob Storage container
+        // 4. Return the URL of the ZIP in storage
         
-        // Simulate successful deployment
+        // For now, let's use a direct approach that works with the actual webhook
+        const backendFolder = '/tmp/backend';
+        const zipUrl = `https://github.com/${repoOwner}/${repoName}/archive/refs/heads/${branch}.zip`;
+        
+        return {
+            zipUrl,
+            folderPath: 'backend' // Path within the repository
+        };
+    } catch (error) {
+        throw new Error(`Failed to create deployment package: ${error.message}`);
+    }
+}
+
+// Function to deploy to Azure Web App with NO BUILD
+async function deployToAzureWebApp(resourceGroup, webAppName, zipUrl, folderPath, subscriptionId, context) {
+    context.log(`Deploying to ${webAppName} in ${resourceGroup} (subscription: ${subscriptionId})`);
+    
+    try {
+        // IMPORTANT: We'll use Kudu REST API instead of the Management API
+        // because it allows more control over deployment
+        const kuduUrl = `https://${webAppName}.scm.azurewebsites.net/api/zipdeploy`;
+        
+        // Get the publish profile (in a real implementation, this would be retrieved from KeyVault or env vars)
+        const publishingUser = process.env.PUBLISHING_USER || `$${webAppName}`;
+        const publishingPassword = process.env.PUBLISHING_PASSWORD || process.env.AZURE_FUNCTION_KEY;
+        
+        // Create auth header
+        const auth = Buffer.from(`${publishingUser}:${publishingPassword}`).toString('base64');
+        
+        // Add specific headers to bypass Oryx
+        const deploymentHeaders = {
+            'Authorization': `Basic ${auth}`,
+            'Content-Type': 'application/zip',
+            // THESE ARE THE CRITICAL HEADERS TO BYPASS ORYX
+            'WEBSITE_RUN_FROM_PACKAGE': '0', // Don't run from package
+            'SCM_DO_BUILD_DURING_DEPLOYMENT': 'false', // Skip Oryx build
+            'SCM_SKIP_ORYX_BUILD': 'true' // Explicitly skip Oryx
+        };
+        
+        // For a real implementation, we would download the ZIP from GitHub, 
+        // extract it, go to the backend folder, and create a new ZIP of just that folder
+        // Then upload that ZIP directly to the Kudu API
+        
+        context.log(`Deploying to Kudu at ${kuduUrl} with SCM_DO_BUILD_DURING_DEPLOYMENT=false`);
+        
+        // In a real implementation, you would:
+        // 1. Download the ZIP file from the zipUrl
+        // 2. Extract it and navigate to the backend folder
+        // 3. Create a new ZIP of just the backend folder
+        // 4. Upload that ZIP to the Kudu API
+        
+        // For this example, we're simulating a successful deployment
+        // return await axios.post(kuduUrl, zipData, { headers: deploymentHeaders });
+        
+        // To really implement this, you would use Azure Functions durable entities to:
+        // 1. Download the repo ZIP
+        // 2. Extract it
+        // 3. Repackage just the backend folder
+        // 4. Deploy it to the Kudu API
+        
+        context.log(`Simulated deployment to ${webAppName} with ORYX BYPASSED`);
+        context.log(`To complete this implementation, use Azure Durable Functions to handle the ZIP processing`);
+        
         return { status: 'success' };
     } catch (error) {
         throw new Error(`Deployment to ${webAppName} failed: ${error.message}`);
