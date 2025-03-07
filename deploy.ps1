@@ -13,7 +13,7 @@ Push-Location backend
 Compress-Archive -Path *.js, *.json, web.config, .deployment, .env -DestinationPath backend-deploy.zip -Force
 $zipPath = Resolve-Path backend-deploy.zip
 Pop-Location
-
+ 
 # Deploy based on branch
 if ($branch -eq "sandbox") {
     Write-Host "Deploying to development environment (concord-api-dev)..."
