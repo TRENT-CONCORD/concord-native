@@ -1,3 +1,6 @@
+# Ensure we're using direct ZIP deployment, bypassing Oryx
+$env:SCM_DO_BUILD_DURING_DEPLOYMENT = "false"
+
 # Get the current branch
 $branch = git rev-parse --abbrev-ref HEAD
 
@@ -18,7 +21,7 @@ Pop-Location
 if ($branch -eq "sandbox") {
     Write-Host "Deploying to development environment (concord-api-dev)..."
     az account set --subscription "Microsoft Azure Sponsorship (sandbox)"
-    az webapp deploy --resource-group concord-dev --name concord-api-dev --src-path $zipPath
+    az webapp deploy --resource-group concord-dev --name concord-api-dev --src-path $zipPath --no-build
     
     # Verify deployment
     $apiUrl = "https://api-dev.concord.digital/"
