@@ -2,8 +2,24 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-class LandingScreen extends StatelessWidget {
+class LandingScreen extends StatefulWidget {
   const LandingScreen({super.key});
+
+  @override
+  State<LandingScreen> createState() => _LandingScreenState();
+}
+
+class _LandingScreenState extends State<LandingScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Clear any material banners that might be showing from previous screens
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -79,6 +95,18 @@ class LandingScreen extends StatelessWidget {
                           child: SvgPicture.asset(
                             'assets/illustrations/LoginLandingGraphic.svg',
                             fit: BoxFit.contain,
+                            // Handle SVG filter and other advanced elements
+                            allowDrawingOutsideViewBox: true,
+                            placeholderBuilder: (BuildContext context) =>
+                                Container(
+                              height: 200,
+                              width: 200,
+                              child: const Center(
+                                child: CircularProgressIndicator(
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                         const SizedBox(height: 12),

@@ -1,0 +1,14 @@
+---
+description: bear it in mind every time we are working on functionality of the app
+globs: 
+alwaysApply: false
+---
+---
+description: 
+globs: 
+---
+We are building a native mobile app for Android and iOS with Flutter. The app has a combination of features from Discord, Tinder, Grindr, and WhatsApp. Follow the same kind of theme design throughout - purple neon with 3D aspects (shadowing etc).
+# Your rule content
+
+- You can @ files here
+- You can use markdown but dont have to

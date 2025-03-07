@@ -1,0 +1,50 @@
+trigger:
+- main  # Replace 'main' with your branch name if different
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  # Securely store these in Azure DevOps pipeline variables
+  FIREBASE_SERVICE_ACCOUNT_KEY: $(FIREBASE_SERVICE_ACCOUNT_KEY)
+  FIREBASE_TOKEN: $(FIREBASE_TOKEN)
+
+steps:
+# Step 1: Install Flutter
+- script: |
+    curl -s https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_3.10.5-stable.tar.xz | tar -xJ
+    export PATH="$PATH:`pwd`/flutter/bin"
+    flutter doctor
+  displayName: 'Install Flutter'
+
+# Step 2: Install dependencies and build APK
+- script: |
+    export PATH="$PATH:`pwd`/flutter/bin"
+    flutter pub get
+    flutter build apk --release
+  displayName: 'Build APK'
+
+# Step 3: Publish APK as an artifact (optional, for debugging or manual download)
+- task: PublishBuildArtifacts@1
+  inputs:
+    pathtoPublish: 'build/app/outputs/flutter-apk/app-release.apk'
+    artifactName: 'apk'
+
+# Step 4: Install Firebase CLI
+- script: |
+    curl -sL https://firebase.tools | bash
+  displayName: 'Install Firebase CLI'
+
+# Step 5: Authenticate Firebase CLI
+- script: |
+    echo $(FIREBASE_SERVICE_ACCOUNT_KEY) > firebase-key.json
+    firebase auth:login:ci --token $(FIREBASE_TOKEN)
+  displayName: 'Authenticate Firebase CLI'
+
+# Step 6: Run tests on Firebase Test Lab
+- script: |
+    firebase test android run \
+      --type instrumentation \
+      --app build/app/outputs/flutter-apk/app-release.apk \
+      --device model=Pixel2,version=28,locale=en,orientation=portrait
+  displayName: 'Run Tests on Firebase Test Lab' 
