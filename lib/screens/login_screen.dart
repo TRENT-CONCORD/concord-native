@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'account_restoration_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -11,11 +12,26 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  final _authService = AuthService();
+  late TextEditingController _emailController;
+  late TextEditingController _passwordController;
+  late AuthService _authService;
   bool _isLoading = false;
   String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _emailController = TextEditingController();
+    _passwordController = TextEditingController();
+    _authService = AuthService();
+
+    // Clear any material banners that might be showing from previous screens
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentMaterialBanner();
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -32,17 +48,69 @@ class _LoginScreenState extends State<LoginScreen> {
       });
 
       try {
-        await _authService.signInWithEmailAndPassword(
-          email: _emailController.text.trim(),
-          password: _passwordController.text.trim(),
-        );
-        if (mounted) {
-          Navigator.pushReplacementNamed(context, '/home');
+        // First, authenticate the user but don't navigate yet
+        try {
+          debugPrint(
+              'Attempting to sign in with email: ${_emailController.text.trim()}');
+
+          final user = await _authService.signInWithEmailAndPassword(
+            email: _emailController.text.trim(),
+            password: _passwordController.text.trim(),
+          );
+
+          if (mounted) {
+            debugPrint('Sign in successful, checking deletion status');
+            // Check if the account is scheduled for deletion
+            final deletionStatus =
+                await _authService.checkDeletionStatusDuringSignIn(user);
+
+            if (deletionStatus['scheduledForDeletion'] == true) {
+              // Sign the user out immediately - we'll sign them back in if they choose to restore
+              await _authService.signOut();
+
+              // Navigate to the restoration screen
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => AccountRestorationScreen(
+                    uid: user.uid,
+                    daysRemaining: deletionStatus['daysRemaining'],
+                    email: _emailController.text.trim(),
+                    password: _passwordController.text.trim(),
+                  ),
+                ),
+              );
+            } else {
+              // Account is not scheduled for deletion, proceed with normal login
+              // Add a short delay to allow Firebase to complete its operations
+              await Future.delayed(const Duration(milliseconds: 500));
+
+              // Always reload the app to prevent pigeon errors
+              Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
+            }
+          }
+        } catch (authError) {
+          // Handle auth-specific errors
+          debugPrint('Authentication specific error: $authError');
+          setState(() {
+            _errorMessage = authError.toString();
+          });
+
+          // Don't navigate in case of authentication errors
         }
       } catch (e) {
         setState(() {
           _errorMessage = e.toString();
         });
+
+        // Log the error but still reload the app after a brief delay
+        debugPrint('Login error: $e');
+
+        if (mounted) {
+          Future.delayed(const Duration(seconds: 1), () {
+            Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
+          });
+        }
       } finally {
         if (mounted) {
           setState(() {

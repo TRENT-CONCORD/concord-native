@@ -1,0 +1,2043 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import '../models/user_profile.dart';
+import '../services/profile_service.dart';
+import '../theme/colors.dart';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:reorderables/reorderables.dart';
+import '../models/profile_enums.dart';
+
+// Constants for colors and styling
+const Color kBackgroundColor = Color(0xFF0A0A0A);
+const Color kSectionBackground = Color(0xFF141414);
+const Color kChipBackground = Color(0xFF1A1A1A);
+const Color kPurpleAccent = Color(0xFF6A1B9A);
+const Color kPurpleNeon = Color(0xFF9C27B0);
+const Color kPurpleLight = Color(0xFFE1BEE7);
+const Color kTextPrimary = Colors.white;
+const Color kTextSecondary = Color(0xFF9E9E9E);
+const Color kOnlineIndicator = Color(0xFF4CAF50);
+
+// Shadow styles
+final List<BoxShadow> kElevatedShadow = [
+  BoxShadow(
+    color: Color(0xFFCC0AE6),
+    offset: Offset(-2, -2),
+    blurRadius: 4,
+    spreadRadius: -1,
+  ),
+  BoxShadow(
+    color: Color(0xFFCC0AE6),
+    offset: Offset(2, 2),
+    blurRadius: 4,
+    spreadRadius: -1,
+  ),
+];
+
+final BoxDecoration kNeonBorderDecoration = BoxDecoration(
+  color: kSectionBackground,
+  borderRadius: BorderRadius.circular(16),
+  boxShadow: [
+    BoxShadow(
+      color: Color(0xFFCC0AE6),
+      offset: Offset(-2, -2),
+      blurRadius: 4,
+      spreadRadius: -1,
+    ),
+    BoxShadow(
+      color: Color(0xFFCC0AE6),
+      offset: Offset(2, 2),
+      blurRadius: 4,
+      spreadRadius: -1,
+    ),
+  ],
+);
+
+class ProfileScreen extends StatefulWidget {
+  final String uid;
+
+  const ProfileScreen({Key? key, required this.uid}) : super(key: key);
+
+  @override
+  _ProfileScreenState createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends State<ProfileScreen> {
+  final ProfileService _profileService = ProfileService();
+  final _scrollController = ScrollController();
+  final _pageController = PageController();
+  final _bioController = TextEditingController();
+  final _displayNameController = TextEditingController();
+  final _jobTitleController = TextEditingController();
+  final _companyController = TextEditingController();
+  UserProfile? _profile;
+  bool _isLoading = true;
+  bool _isExpanded = false;
+  DateTime? _selectedDate;
+
+  void _showBottomSheet({
+    required String title,
+    required Widget content,
+    VoidCallback? onSave,
+    bool showActions = true,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: kSectionBackground,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) => Padding(
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).viewInsets.bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.withOpacity(0.3),
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: kTextPrimary,
+                    ),
+                  ),
+                ),
+                const Divider(color: kPurpleAccent, height: 1),
+                SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: content,
+                  ),
+                ),
+                if (showActions)
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: Text('Cancel',
+                              style: TextStyle(color: kTextSecondary)),
+                        ),
+                        const SizedBox(width: 16),
+                        ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: kPurpleAccent,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          onPressed: () {
+                            if (onSave != null) {
+                              onSave();
+                              _saveProfile();
+                            }
+                            Navigator.pop(context);
+                          },
+                          child: Text('Save',
+                              style: TextStyle(color: Colors.white)),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadProfile();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    _pageController.dispose();
+    _bioController.dispose();
+    _displayNameController.dispose();
+    _jobTitleController.dispose();
+    _companyController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadProfile() async {
+    try {
+      debugPrint('Loading profile for UID: ${widget.uid}');
+      var profile = await _profileService.getProfile(widget.uid);
+
+      if (mounted) {
+        if (profile == null) {
+          debugPrint(
+              'Profile not found, creating new profile for UID: ${widget.uid}');
+          profile = UserProfile.createEmpty(widget.uid);
+          await _profileService.updateProfile(profile);
+        }
+
+        debugPrint('Profile loaded successfully: ${profile.toMap()}');
+
+        // Validate gender sub-option when loading profile
+        if (profile.genderSubOption != null) {
+          bool isValidSubOption = false;
+          switch (profile.gender) {
+            case GenderOption.man:
+              isValidSubOption = GenderSubOptionMan.values
+                  .map((e) => e.display)
+                  .contains(profile.genderSubOption);
+              break;
+            case GenderOption.woman:
+              isValidSubOption = GenderSubOptionWoman.values
+                  .map((e) => e.display)
+                  .contains(profile.genderSubOption);
+              break;
+            case GenderOption.beyondBinary:
+              isValidSubOption = GenderSubOptionBeyondBinary.values
+                  .map((e) => e.display)
+                  .contains(profile.genderSubOption);
+              break;
+            default:
+              isValidSubOption = false;
+          }
+          if (!isValidSubOption) {
+            profile = profile.copyWith(genderSubOption: null);
+          }
+        }
+
+        setState(() {
+          _profile = profile;
+          _isLoading = false;
+          _bioController.text = profile?.bio ?? '';
+          _displayNameController.text = profile?.displayName ?? '';
+          _jobTitleController.text = profile?.jobTitle ?? '';
+          _companyController.text = profile?.company ?? '';
+          _selectedDate = profile?.dateOfBirth;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading profile for UID: ${widget.uid}, Error: $e');
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading profile: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _editPhoto(int index) async {
+    final pickedFile =
+        await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (pickedFile != null && mounted) {
+      setState(() {
+        if (index == 0) {
+          _profile?.mainPhotoUrl = pickedFile.path;
+        } else {
+          final photoIndex = index - 1;
+          if (photoIndex < (_profile?.additionalPhotos.length ?? 0)) {
+            _profile?.additionalPhotos[photoIndex] = pickedFile.path;
+          } else {
+            _profile?.additionalPhotos.add(pickedFile.path);
+          }
+        }
+      });
+      _saveProfile(); // Save after updating photos
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: kBackgroundColor,
+        body: Center(child: CircularProgressIndicator(color: kPurpleAccent)),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: kBackgroundColor,
+      body: CustomScrollView(
+        controller: _scrollController,
+        slivers: [
+          SliverAppBar(
+            expandedHeight: MediaQuery.of(context).size.width,
+            pinned: true,
+            backgroundColor: kBackgroundColor,
+            flexibleSpace: FlexibleSpaceBar(
+              background: _buildPhotoGrid(),
+            ),
+            leading: IconButton(
+              icon: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.4),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.arrow_back, color: Colors.white),
+              ),
+              onPressed: () => Navigator.pop(context),
+            ),
+            actions: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: IconButton(
+                  icon: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.4),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.edit, color: Colors.white),
+                  ),
+                  onPressed: _showPhotoManagement,
+                ),
+              ),
+            ],
+          ),
+          SliverList(
+            delegate: SliverChildListDelegate([
+              _buildProfileInfo(),
+              _buildInfoSection(),
+              const SizedBox(height: 32),
+            ]),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPhotoGrid() {
+    final photos = <String>[];
+
+    // Handle main photo
+    if (_profile?.mainPhotoUrl != null) {
+      photos.add(_profile!.mainPhotoUrl!);
+    }
+
+    // Handle additional photos
+    if (_profile?.additionalPhotos != null) {
+      photos.addAll(_profile!.additionalPhotos);
+    }
+
+    const maxPhotos = 12;
+    final canAddMore = photos.length < maxPhotos;
+
+    return Container(
+      color: kBackgroundColor,
+      child: AspectRatio(
+        aspectRatio: 1,
+        child: GridView.builder(
+          shrinkWrap: true,
+          physics: NeverScrollableScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 2,
+            mainAxisSpacing: 2,
+          ),
+          itemCount: canAddMore ? photos.length + 1 : photos.length,
+          itemBuilder: (context, index) {
+            if (index == photos.length && canAddMore) {
+              return GestureDetector(
+                onTap: () => _editPhoto(index),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: kSectionBackground,
+                    border: Border.all(
+                      color: kPurpleNeon.withOpacity(0.3),
+                      width: 1,
+                    ),
+                  ),
+                  child: Icon(
+                    Icons.add_photo_alternate,
+                    color: kPurpleAccent,
+                    size: 32,
+                  ),
+                ),
+              );
+            }
+
+            return GestureDetector(
+              onTap: () => _showPhotoOptions(index),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: kSectionBackground,
+                      border: Border.all(
+                        color: kPurpleNeon.withOpacity(0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: _buildPhotoWidget(photos[index]),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPhotoWidget(String photoPath) {
+    if (photoPath.startsWith('http')) {
+      // Handle network images
+      return Image.network(
+        photoPath,
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return Center(
+            child: Icon(
+              Icons.broken_image,
+              color: Colors.red,
+              size: 32,
+            ),
+          );
+        },
+      );
+    } else {
+      // Handle local files
+      return Image.file(
+        File(photoPath),
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return Center(
+            child: Icon(
+              Icons.broken_image,
+              color: Colors.red,
+              size: 32,
+            ),
+          );
+        },
+      );
+    }
+  }
+
+  void _showPhotoOptions(int index) {
+    _showBottomSheet(
+      title: index == 0 ? 'Main Photo' : 'Photo ${index + 1}',
+      content: Column(
+        children: [
+          if (index > 0)
+            ListTile(
+              leading: Icon(Icons.photo, color: kPurpleAccent),
+              title: Text('Set as Main Photo'),
+              onTap: () {
+                setState(() {
+                  final mainPhoto = _profile!.mainPhotoUrl;
+                  final selectedPhoto = _profile!.additionalPhotos[index - 1];
+                  _profile!.mainPhotoUrl = selectedPhoto;
+                  _profile!.additionalPhotos[index - 1] = mainPhoto!;
+                });
+                _saveProfile();
+                Navigator.pop(context);
+              },
+            ),
+          ListTile(
+            leading: Icon(Icons.edit, color: kPurpleAccent),
+            title: Text('Change Photo'),
+            onTap: () {
+              Navigator.pop(context);
+              _editPhoto(index);
+            },
+          ),
+          ListTile(
+            leading: Icon(Icons.delete, color: Colors.red),
+            title: Text('Delete Photo'),
+            onTap: () async {
+              if (index == 0) {
+                _profile!.mainPhotoUrl = null;
+              } else {
+                _profile!.additionalPhotos.removeAt(index - 1);
+              }
+              await _profileService.deleteProfilePicture(_profile!.uid);
+              _saveProfile();
+              Navigator.pop(context);
+            },
+          ),
+        ],
+      ),
+      showActions: false,
+    );
+  }
+
+  void _showPhotoManagement() {
+    _showBottomSheet(
+      title: 'Manage Photos',
+      content: ReorderableListView.builder(
+        shrinkWrap: true,
+        itemCount: _profile?.additionalPhotos.length ?? 0,
+        onReorder: (oldIndex, newIndex) {
+          setState(() {
+            if (newIndex > oldIndex) {
+              newIndex -= 1;
+            }
+            final item = _profile!.additionalPhotos.removeAt(oldIndex);
+            _profile!.additionalPhotos.insert(newIndex, item);
+          });
+          _saveProfile();
+        },
+        itemBuilder: (context, index) {
+          final photo = _profile!.additionalPhotos[index];
+          return ListTile(
+            key: ValueKey(photo),
+            leading: SizedBox(
+              width: 50,
+              height: 50,
+              child: _buildPhotoWidget(photo),
+            ),
+            title: Text('Photo ${index + 1}'),
+            trailing: ReorderableDragStartListener(
+              index: index,
+              child: Icon(Icons.drag_handle, color: kPurpleAccent),
+            ),
+          );
+        },
+      ),
+      showActions: false,
+    );
+  }
+
+  Widget _buildProfileInfo() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 16, 12, 0),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: kSectionBackground,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0xFFCC0AE6),
+            offset: Offset(-2, -2),
+            blurRadius: 4,
+            spreadRadius: -1,
+          ),
+          BoxShadow(
+            color: Color(0xFFCC0AE6),
+            offset: Offset(2, 2),
+            blurRadius: 4,
+            spreadRadius: -1,
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    GestureDetector(
+                      onTap: _editDisplayName,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '${_profile?.displayName ?? 'Add name...'} (${_calculateAge(_profile?.dateOfBirth)})',
+                              style: const TextStyle(
+                                color: kTextPrimary,
+                                fontSize: 28,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -0.5,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.edit,
+                                color: kPurpleAccent.withOpacity(0.5),
+                                size: 20),
+                            onPressed: _editDisplayName,
+                          ),
+                        ],
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: _editUsername,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              '@${_profile?.username ?? 'Add username...'}',
+                              style: TextStyle(
+                                color: kTextSecondary,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w400,
+                                letterSpacing: 0.1,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(Icons.edit,
+                                color: kPurpleAccent.withOpacity(0.5),
+                                size: 16),
+                            onPressed: _editUsername,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: [
+                          GestureDetector(
+                            onTap: _editGender,
+                            child: Row(
+                              children: [
+                                SvgPicture.asset(
+                                  'assets/ProfilePageIcons/GenderIcon.svg',
+                                  width: 24,
+                                  height: 24,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _profile?.genderSubOption ??
+                                      _profile?.gender.display ??
+                                      'Gender',
+                                  style: TextStyle(
+                                      color: kTextSecondary, fontSize: 16),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text('•',
+                              style: TextStyle(
+                                  color: kTextSecondary, fontSize: 16)),
+                          const SizedBox(width: 4),
+                          GestureDetector(
+                            onTap: _editSexuality,
+                            child: Row(
+                              children: [
+                                SvgPicture.asset(
+                                  'assets/ProfilePageIcons/OrientationIcon.svg',
+                                  width: 24,
+                                  height: 24,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _profile?.sexuality?.display ?? 'Sexuality',
+                                  style: TextStyle(
+                                      color: kTextSecondary, fontSize: 16),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text('•',
+                              style: TextStyle(
+                                  color: kTextSecondary, fontSize: 16)),
+                          const SizedBox(width: 4),
+                          GestureDetector(
+                            onTap: _editHeight,
+                            child: Row(
+                              children: [
+                                SvgPicture.asset(
+                                  'assets/ProfilePageIcons/HeightIcon.svg',
+                                  width: 24,
+                                  height: 24,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _profile?.height != null
+                                      ? '${_profile!.height}cm'
+                                      : 'Height',
+                                  style: TextStyle(
+                                      color: kTextSecondary, fontSize: 16),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        GestureDetector(
+                          onTap: _editLookingFor,
+                          child: Row(
+                            children: [
+                              SvgPicture.asset(
+                                'assets/ProfilePageIcons/LookingForIcon.svg',
+                                width: 24,
+                                height: 24,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _profile?.lookingFor.isNotEmpty == true
+                                    ? _profile!.lookingFor
+                                        .map((l) => l.display)
+                                        .join(', ')
+                                    : 'Add looking for',
+                                style: TextStyle(
+                                    color: kTextSecondary, fontSize: 16),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    GestureDetector(
+                      onTap: _editOccupation,
+                      child: Row(
+                        children: [
+                          SvgPicture.asset(
+                            'assets/ProfilePageIcons/CareerIcon.svg',
+                            width: 20,
+                            height: 20,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _formatOccupation(),
+                            style:
+                                TextStyle(color: kTextSecondary, fontSize: 16),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    GestureDetector(
+                      onTap: _editSchool,
+                      child: Row(
+                        children: [
+                          SvgPicture.asset(
+                            'assets/ProfilePageIcons/SchoolIcon.svg',
+                            width: 20,
+                            height: 20,
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            _profile?.school ?? 'Add school...',
+                            style:
+                                TextStyle(color: kTextSecondary, fontSize: 16),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 24),
+          GestureDetector(
+            onTap: _editBio,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(24, 12, 16, 16),
+              decoration: BoxDecoration(
+                color: kSectionBackground.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Color(0xFFCC0AE6).withOpacity(0.3),
+                  width: 1,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'What\'s the vibe',
+                        style: TextStyle(
+                          color: kPurpleLight,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      IconButton(
+                        padding: EdgeInsets.zero,
+                        constraints: BoxConstraints(),
+                        icon: Icon(Icons.edit,
+                            color: kPurpleAccent.withOpacity(0.5), size: 20),
+                        onPressed: _editBio,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    _profile?.bio ?? 'Tell others about yourself...',
+                    style: TextStyle(
+                      color: kTextPrimary,
+                      fontSize: 16,
+                      height: 1.4,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _editSexuality() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Sexuality',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: SexualityOption.values
+              .map((option) => RadioListTile<SexualityOption>(
+                    title: Text(option.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: option,
+                    groupValue: _profile!.sexuality,
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _profile = _profile!.copyWith(sexuality: value);
+                        });
+                      }
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {},
+    );
+  }
+
+  Widget _buildInfoSection() {
+    return Column(
+      children: [
+        Container(
+          margin: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Left column (Basics)
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: kSectionBackground,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0xFFCC0AE6),
+                        offset: Offset(-2, -2),
+                        blurRadius: 4,
+                        spreadRadius: -1,
+                      ),
+                      BoxShadow(
+                        color: Color(0xFFCC0AE6),
+                        offset: Offset(2, 2),
+                        blurRadius: 4,
+                        spreadRadius: -1,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 12, horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: kPurpleNeon.withOpacity(0.2),
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(15)),
+                        ),
+                        child: Text(
+                          'Basics',
+                          style: TextStyle(
+                            color: kPurpleLight,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildVerticalChips([
+                        _buildChip(
+                          svgAsset: 'assets/ProfilePageIcons/ZodiacIcon.svg',
+                          label: 'Saggitarius',
+                          onTap: _editZodiacSign,
+                        ),
+                        _buildChip(
+                          svgAsset: 'assets/ProfilePageIcons/SchoolIcon.svg',
+                          label: 'Honours',
+                          onTap: _editEducation,
+                        ),
+                        _buildChip(
+                          svgAsset:
+                              'assets/ProfilePageIcons/LookingForIcon.svg',
+                          label: 'Not sure yet',
+                          onTap: _editLookingFor,
+                        ),
+                        _buildChip(
+                          svgAsset:
+                              'assets/ProfilePageIcons/CommStyleIcons.svg',
+                          label: 'Text, Better in person',
+                          onTap: _editCommunicationStyles,
+                        ),
+                        _buildChip(
+                          svgAsset:
+                              'assets/ProfilePageIcons/LoveLanguagesIcon.svg',
+                          label: 'Touch, Quality time',
+                          onTap: _editLoveLanguages,
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              // Right column (Lifestyle)
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: kSectionBackground,
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Color(0xFFCC0AE6),
+                        offset: Offset(-2, -2),
+                        blurRadius: 4,
+                        spreadRadius: -1,
+                      ),
+                      BoxShadow(
+                        color: Color(0xFFCC0AE6),
+                        offset: Offset(2, 2),
+                        blurRadius: 4,
+                        spreadRadius: -1,
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 12, horizontal: 16),
+                        decoration: BoxDecoration(
+                          color: kPurpleNeon.withOpacity(0.2),
+                          borderRadius: const BorderRadius.vertical(
+                              top: Radius.circular(15)),
+                        ),
+                        child: Text(
+                          'Lifestyle',
+                          style: TextStyle(
+                            color: kPurpleLight,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildVerticalChips([
+                        _buildChip(
+                          svgAsset: 'assets/ProfilePageIcons/DrinkingIcon.svg',
+                          label: 'On special occasions',
+                          onTap: _editDrinking,
+                        ),
+                        _buildChip(
+                          svgAsset: 'assets/ProfilePageIcons/SmokingIcon.svg',
+                          label: 'Non-smoker',
+                          onTap: _editSmoking,
+                        ),
+                        _buildChip(
+                          svgAsset: 'assets/ProfilePageIcons/WorkoutIcon.svg',
+                          label: 'Often',
+                          onTap: _editWorkout,
+                        ),
+                        _buildChip(
+                          svgAsset: 'assets/ProfilePageIcons/DietIcon.svg',
+                          label: 'Omnivore',
+                          onTap: _editDiet,
+                        ),
+                        _buildChip(
+                          svgAsset: 'assets/ProfilePageIcons/SleepingIcon.svg',
+                          label: 'In a spectrum',
+                          onTap: _editSleep,
+                        ),
+                        _buildChip(
+                          svgAsset: 'assets/ProfilePageIcons/PetsIcon.svg',
+                          label: 'Pet1, Pet2, Pet3',
+                          onTap: _editPets,
+                        ),
+                      ]),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Interests section
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: kSectionBackground,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Color(0xFFCC0AE6),
+                offset: Offset(-2, -2),
+                blurRadius: 4,
+                spreadRadius: -1,
+              ),
+              BoxShadow(
+                color: Color(0xFFCC0AE6),
+                offset: Offset(2, 2),
+                blurRadius: 4,
+                spreadRadius: -1,
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+                decoration: BoxDecoration(
+                  color: kPurpleNeon.withOpacity(0.2),
+                  borderRadius:
+                      const BorderRadius.vertical(top: Radius.circular(15)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Interests',
+                      style: TextStyle(
+                        color: kPurpleLight,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    IconButton(
+                      icon: Icon(Icons.edit, color: kPurpleLight),
+                      onPressed: _editInterests,
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: _profile?.interests.isEmpty ?? true
+                    ? Text(
+                        'Select your interests...',
+                        style: TextStyle(
+                          color: kTextSecondary,
+                          fontSize: 14,
+                        ),
+                      )
+                    : Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: _profile!.interests
+                            .map((interest) => _buildInterestChip(interest))
+                            .toList(),
+                      ),
+              )
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVerticalChips(List<Widget> chips) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: chips
+            .map((chip) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: chip,
+                ))
+            .toList(),
+      ),
+    );
+  }
+
+  Widget _buildChip(
+      {String? svgAsset, required String label, VoidCallback? onTap}) {
+    String getPlaceholderText(String label) {
+      if (_profile != null) {
+        // Return actual values based on profile data
+        switch (label.toLowerCase()) {
+          case 'saggitarius':
+            return _profile!.zodiacSign?.display ?? 'Select zodiac sign...';
+          case 'honours':
+            return _profile!.educationLevels.isNotEmpty
+                ? _profile!.educationLevels.map((e) => e.display).join(', ')
+                : 'Select education level...';
+          case 'not sure yet':
+            return _profile!.lookingFor.isNotEmpty
+                ? _profile!.lookingFor.map((l) => l.display).join(', ')
+                : 'Select what you\'re looking for...';
+          case 'text, better in person':
+            return _profile!.communicationStyles.isNotEmpty
+                ? _profile!.communicationStyles.map((c) => c.display).join(', ')
+                : 'Select communication style...';
+          case 'touch, quality time':
+            return _profile!.loveLanguages.isNotEmpty
+                ? _profile!.loveLanguages.map((l) => l.display).join(', ')
+                : 'Select love languages...';
+          case 'on special occasions':
+            return _profile!.drinkingHabit?.display ??
+                'Select drinking habits...';
+          case 'non-smoker':
+            return _profile!.smokingHabit?.display ??
+                'Select smoking habits...';
+          case 'often':
+            return _profile!.workoutHabit?.display ??
+                'Select workout habits...';
+          case 'omnivore':
+            return _profile!.dietaryPreference?.display ?? 'Select diet...';
+          case 'in a spectrum':
+            return _profile!.sleepingHabit?.display ?? 'Select sleep habits...';
+          case 'pet1, pet2, pet3':
+            return _profile!.pets.isNotEmpty
+                ? _profile!.pets.map((p) => p.display).join(', ')
+                : 'Select pets...';
+          default:
+            return 'Select...';
+        }
+      }
+
+      // Return placeholder text if no profile
+      switch (label.toLowerCase()) {
+        case 'text, better in person':
+          return 'Select communication style...';
+        case 'touch, quality time':
+          return 'Select love languages...';
+        case 'on special occasions':
+          return 'Select drinking habits...';
+        case 'non-smoker':
+          return 'Select smoking habits...';
+        case 'often':
+          return 'Select workout habits...';
+        case 'omnivore':
+          return 'Select diet...';
+        case 'in a spectrum':
+          return 'Select sleep habits...';
+        case 'pet1, pet2, pet3':
+          return 'Select pets...';
+        case 'not sure yet':
+          return 'Select what you\'re looking for...';
+        case 'honours':
+          return 'Select education level...';
+        case 'saggitarius':
+          return 'Select zodiac sign...';
+        default:
+          return 'Select...';
+      }
+    }
+
+    String placeholderText = getPlaceholderText(label);
+    bool isEmpty = placeholderText.toLowerCase().contains('select');
+
+    return InkWell(
+      onTap: () {
+        switch (label.toLowerCase()) {
+          case 'saggitarius':
+            _editZodiacSign();
+            break;
+          case 'honours':
+            _editEducation();
+            break;
+          case 'not sure yet':
+            _editLookingFor();
+            break;
+          case 'text, better in person':
+            _editCommunicationStyles();
+            break;
+          case 'touch, quality time':
+            _editLoveLanguages();
+            break;
+          case 'on special occasions':
+            _editDrinking();
+            break;
+          case 'non-smoker':
+            _editSmoking();
+            break;
+          case 'often':
+            _editWorkout();
+            break;
+          case 'omnivore':
+            _editDiet();
+            break;
+          case 'in a spectrum':
+            _editSleep();
+            break;
+          case 'pet1, pet2, pet3':
+            _editPets();
+            break;
+          default:
+            if (onTap != null) onTap();
+        }
+      },
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 8,
+        ),
+        decoration: BoxDecoration(
+          color: isEmpty ? Colors.black.withOpacity(0.3) : kChipBackground,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isEmpty
+                ? kPurpleNeon.withOpacity(0.15)
+                : kPurpleNeon.withOpacity(0.3),
+            width: 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            if (svgAsset != null) ...[
+              SvgPicture.asset(
+                svgAsset,
+                width: 28,
+                height: 28,
+                colorFilter: isEmpty
+                    ? ColorFilter.mode(
+                        Colors.white.withOpacity(0.3),
+                        BlendMode.srcIn,
+                      )
+                    : null,
+              ),
+              const SizedBox(width: 12),
+            ],
+            if (isEmpty) ...[
+              Icon(
+                Icons.add_circle_outline,
+                size: 16,
+                color: kPurpleNeon.withOpacity(0.5),
+              ),
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Text(
+                placeholderText,
+                style: TextStyle(
+                  color: isEmpty ? kTextSecondary : kTextPrimary,
+                  fontSize: 14,
+                  fontStyle: isEmpty ? FontStyle.italic : FontStyle.normal,
+                ),
+              ),
+            ),
+            Icon(
+              isEmpty ? Icons.add : Icons.edit,
+              color: isEmpty ? kPurpleNeon.withOpacity(0.5) : kPurpleAccent,
+              size: 16,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  int _calculateAge(DateTime? birthDate) {
+    if (birthDate == null) return 0;
+    final today = DateTime.now();
+    var age = today.year - birthDate.year;
+    final m = today.month - birthDate.month;
+    if (m < 0 || (m == 0 && today.day < birthDate.day)) {
+      age--;
+    }
+    return age;
+  }
+
+  String _formatDate(DateTime? date) {
+    if (date == null) return 'Add date of birth...';
+    return '${date.day}/${date.month}/${date.year}';
+  }
+
+  String _formatOccupation() {
+    if (_profile == null) return 'Add occupation...';
+    final parts = [
+      if (_profile!.jobTitle?.isNotEmpty == true) _profile!.jobTitle,
+      if (_profile!.company?.isNotEmpty == true) 'at ${_profile!.company}',
+    ];
+    return parts.isEmpty ? 'Add occupation...' : parts.join(' ');
+  }
+
+  double _calculateDistance() {
+    if (_profile?.latitude == null || _profile?.longitude == null) return 0;
+    // TODO: Get current user's location and calculate distance
+    return _profile!.calculateDistanceTo(0, 0);
+  }
+
+  String _formatLastActive(DateTime? lastActive) {
+    if (lastActive == null) return 'N/A';
+    final now = DateTime.now();
+    final difference = now.difference(lastActive);
+    if (difference.inDays == 0) {
+      return 'Today at ${_formatTime(lastActive)}';
+    } else if (difference.inDays == 1) {
+      return 'Yesterday at ${_formatTime(lastActive)}';
+    } else if (difference.inDays < 365) {
+      return '${lastActive.day} ${_monthName(lastActive.month)} at ${_formatTime(lastActive)}';
+    } else {
+      return '${lastActive.day} ${_monthName(lastActive.month)} ${lastActive.year} at ${_formatTime(lastActive)}';
+    }
+  }
+
+  String _formatTime(DateTime dateTime) {
+    return '${dateTime.hour}:${dateTime.minute.toString().padLeft(2, '0')}';
+  }
+
+  String _monthName(int month) {
+    const months = [
+      'January',
+      'February',
+      'March',
+      'April',
+      'May',
+      'June',
+      'July',
+      'August',
+      'September',
+      'October',
+      'November',
+      'December'
+    ];
+    return months[month - 1];
+  }
+
+  Future<void> _saveProfile() async {
+    if (_profile != null) {
+      try {
+        debugPrint('Saving profile: ${_profile!.toMap()}');
+
+        // Validate gender sub-option before saving
+        if (_profile!.genderSubOption != null) {
+          bool isValidSubOption = false;
+          switch (_profile!.gender) {
+            case GenderOption.man:
+              isValidSubOption = GenderSubOptionMan.values
+                  .map((e) => e.display)
+                  .contains(_profile!.genderSubOption);
+              break;
+            case GenderOption.woman:
+              isValidSubOption = GenderSubOptionWoman.values
+                  .map((e) => e.display)
+                  .contains(_profile!.genderSubOption);
+              break;
+            case GenderOption.beyondBinary:
+              isValidSubOption = GenderSubOptionBeyondBinary.values
+                  .map((e) => e.display)
+                  .contains(_profile!.genderSubOption);
+              break;
+            default:
+              isValidSubOption = false;
+          }
+          if (!isValidSubOption) {
+            setState(() {
+              _profile = _profile!.copyWith(genderSubOption: null);
+            });
+          }
+        }
+
+        // Validate required fields before saving
+        final errors = _profile!.getValidationErrors();
+        if (errors.isNotEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    'Please complete required fields: ${errors.join(', ')}'),
+                backgroundColor: Colors.red,
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+          }
+          return;
+        }
+
+        await _profileService.updateProfile(_profile!);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Profile updated successfully'),
+              backgroundColor: Colors.green,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } catch (e) {
+        debugPrint('Error saving profile: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to update profile: ${e.toString()}'),
+              backgroundColor: Colors.red,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+    }
+  }
+
+  void _editInterests() {
+    if (_profile == null) return;
+
+    final selectedInterests = List<Interest>.from(_profile?.interests ?? []);
+
+    _showBottomSheet(
+      title: 'Edit Interests',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: Interest.values
+              .map((interest) => CheckboxListTile(
+                    title: Text(interest.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: selectedInterests.contains(interest),
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          selectedInterests.add(interest);
+                        } else {
+                          selectedInterests.remove(interest);
+                        }
+                      });
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(interests: selectedInterests);
+        });
+      },
+    );
+  }
+
+  Widget _buildInterestChip(Interest interest) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: kChipBackground,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: kPurpleNeon.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Text(
+        interest.display,
+        style: TextStyle(
+          color: kTextPrimary,
+          fontSize: 14,
+        ),
+      ),
+    );
+  }
+
+  void _editDisplayName() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Display Name',
+      content: TextField(
+        controller: _displayNameController,
+        style: TextStyle(color: kTextPrimary),
+        decoration: InputDecoration(
+          hintText: 'Enter your display name',
+          hintStyle: TextStyle(color: kTextSecondary),
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: kPurpleAccent),
+          ),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(
+            displayName: _displayNameController.text,
+          );
+        });
+      },
+    );
+  }
+
+  void _editUsername() {
+    if (_profile == null) return;
+
+    final controller = TextEditingController(text: _profile?.username);
+
+    _showBottomSheet(
+      title: 'Edit Username',
+      content: TextField(
+        controller: controller,
+        style: TextStyle(color: kTextPrimary),
+        decoration: InputDecoration(
+          hintText: 'Enter username',
+          hintStyle: TextStyle(color: kTextSecondary),
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: kPurpleAccent),
+          ),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(
+            username: controller.text,
+          );
+        });
+      },
+    );
+  }
+
+  void _editGender() {
+    if (_profile == null) return;
+
+    var tempProfile = _profile!.copyWith();
+
+    _showBottomSheet(
+      title: 'Edit Gender',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: GenderOption.values
+              .map((option) => RadioListTile<GenderOption>(
+                    title: Text(option.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: option,
+                    groupValue: tempProfile.gender,
+                    onChanged: (value) {
+                      setState(() {
+                        tempProfile = tempProfile.copyWith(gender: value);
+                      });
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = tempProfile;
+        });
+      },
+    );
+  }
+
+  void _editHeight() {
+    if (_profile == null) return;
+
+    final controller =
+        TextEditingController(text: _profile?.height?.toString() ?? '');
+
+    _showBottomSheet(
+      title: 'Edit Height',
+      content: TextField(
+        controller: controller,
+        keyboardType: TextInputType.number,
+        style: TextStyle(color: kTextPrimary),
+        decoration: InputDecoration(
+          hintText: 'Enter height in cm',
+          hintStyle: TextStyle(color: kTextSecondary),
+          suffixText: 'cm',
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: kPurpleAccent),
+          ),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(
+            height: int.tryParse(controller.text),
+          );
+        });
+      },
+    );
+  }
+
+  void _editLookingFor() {
+    if (_profile == null) return;
+
+    final selectedOptions =
+        List<LookingForOption>.from(_profile?.lookingFor ?? []);
+
+    _showBottomSheet(
+      title: 'Looking For',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: LookingForOption.values
+              .map((option) => CheckboxListTile(
+                    title: Text(option.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: selectedOptions.contains(option),
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          selectedOptions.add(option);
+                        } else {
+                          selectedOptions.remove(option);
+                        }
+                      });
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(lookingFor: selectedOptions);
+        });
+      },
+    );
+  }
+
+  void _editOccupation() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Occupation',
+      content: Column(
+        children: [
+          TextField(
+            controller: _jobTitleController,
+            style: TextStyle(color: kTextPrimary),
+            decoration: InputDecoration(
+              labelText: 'Job Title',
+              labelStyle: TextStyle(color: kTextSecondary),
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: kPurpleAccent),
+              ),
+            ),
+          ),
+          SizedBox(height: 16),
+          TextField(
+            controller: _companyController,
+            style: TextStyle(color: kTextPrimary),
+            decoration: InputDecoration(
+              labelText: 'Company',
+              labelStyle: TextStyle(color: kTextSecondary),
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: kPurpleAccent),
+              ),
+            ),
+          ),
+        ],
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(
+            jobTitle: _jobTitleController.text,
+            company: _companyController.text,
+          );
+        });
+      },
+    );
+  }
+
+  void _editSchool() {
+    if (_profile == null) return;
+
+    final controller = TextEditingController(text: _profile?.school);
+
+    _showBottomSheet(
+      title: 'Edit School',
+      content: TextField(
+        controller: controller,
+        style: TextStyle(color: kTextPrimary),
+        decoration: InputDecoration(
+          hintText: 'Enter school name',
+          hintStyle: TextStyle(color: kTextSecondary),
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: kPurpleAccent),
+          ),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(
+            school: controller.text,
+          );
+        });
+      },
+    );
+  }
+
+  void _editBio() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Bio',
+      content: TextField(
+        controller: _bioController,
+        maxLines: 5,
+        style: TextStyle(color: kTextPrimary),
+        decoration: InputDecoration(
+          hintText: 'Tell others about yourself...',
+          hintStyle: TextStyle(color: kTextSecondary),
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: kPurpleAccent),
+          ),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(
+            bio: _bioController.text,
+          );
+        });
+      },
+    );
+  }
+
+  void _editZodiacSign() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Zodiac Sign',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: ZodiacSign.values
+              .map((sign) => RadioListTile<ZodiacSign>(
+                    title: Text(sign.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: sign,
+                    groupValue: _profile!.zodiacSign,
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _profile = _profile!.copyWith(zodiacSign: value);
+                        });
+                      }
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        _saveProfile();
+      },
+    );
+  }
+
+  void _editEducation() {
+    if (_profile == null) return;
+
+    final selectedLevels =
+        List<EducationLevel>.from(_profile?.educationLevels ?? []);
+
+    _showBottomSheet(
+      title: 'Edit Education',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: EducationLevel.values
+              .map((level) => CheckboxListTile(
+                    title: Text(level.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: selectedLevels.contains(level),
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          selectedLevels.add(level);
+                        } else {
+                          selectedLevels.remove(level);
+                        }
+                      });
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(educationLevels: selectedLevels);
+        });
+      },
+    );
+  }
+
+  void _editCommunicationStyles() {
+    if (_profile == null) return;
+
+    final selectedStyles =
+        List<CommunicationStyle>.from(_profile?.communicationStyles ?? []);
+
+    _showBottomSheet(
+      title: 'Edit Communication Styles',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: CommunicationStyle.values
+              .map((style) => CheckboxListTile(
+                    title: Text(style.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: selectedStyles.contains(style),
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          selectedStyles.add(style);
+                        } else {
+                          selectedStyles.remove(style);
+                        }
+                      });
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(communicationStyles: selectedStyles);
+        });
+      },
+    );
+  }
+
+  void _editLoveLanguages() {
+    if (_profile == null) return;
+
+    final selectedLanguages =
+        List<LoveLanguage>.from(_profile?.loveLanguages ?? []);
+
+    _showBottomSheet(
+      title: 'Edit Love Languages',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: LoveLanguage.values
+              .map((language) => CheckboxListTile(
+                    title: Text(language.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: selectedLanguages.contains(language),
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          selectedLanguages.add(language);
+                        } else {
+                          selectedLanguages.remove(language);
+                        }
+                      });
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(loveLanguages: selectedLanguages);
+        });
+      },
+    );
+  }
+
+  void _editDrinking() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Drinking',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: DrinkingHabit.values
+              .map((habit) => RadioListTile<DrinkingHabit>(
+                    title: Text(habit.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: habit,
+                    groupValue: _profile!.drinkingHabit,
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _profile = _profile!.copyWith(drinkingHabit: value);
+                        });
+                      }
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        _saveProfile();
+      },
+    );
+  }
+
+  void _editSmoking() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Smoking',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: SmokingHabit.values
+              .map((habit) => RadioListTile<SmokingHabit>(
+                    title: Text(habit.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: habit,
+                    groupValue: _profile!.smokingHabit,
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _profile = _profile!.copyWith(smokingHabit: value);
+                        });
+                      }
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        _saveProfile();
+      },
+    );
+  }
+
+  void _editWorkout() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Workout',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: WorkoutHabit.values
+              .map((habit) => RadioListTile<WorkoutHabit>(
+                    title: Text(habit.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: habit,
+                    groupValue: _profile!.workoutHabit,
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _profile = _profile!.copyWith(workoutHabit: value);
+                        });
+                      }
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        _saveProfile();
+      },
+    );
+  }
+
+  void _editDiet() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Diet',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: DietaryPreference.values
+              .map((pref) => RadioListTile<DietaryPreference>(
+                    title: Text(pref.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: pref,
+                    groupValue: _profile!.dietaryPreference,
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _profile =
+                              _profile!.copyWith(dietaryPreference: value);
+                        });
+                      }
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        _saveProfile();
+      },
+    );
+  }
+
+  void _editSleep() {
+    if (_profile == null) return;
+
+    _showBottomSheet(
+      title: 'Edit Sleep',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: SleepingHabit.values
+              .map((habit) => RadioListTile<SleepingHabit>(
+                    title: Text(habit.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: habit,
+                    groupValue: _profile!.sleepingHabit,
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() {
+                          _profile = _profile!.copyWith(sleepingHabit: value);
+                        });
+                      }
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        _saveProfile();
+      },
+    );
+  }
+
+  void _editPets() {
+    if (_profile == null) return;
+
+    final selectedPets = List<PetOption>.from(_profile?.pets ?? []);
+
+    _showBottomSheet(
+      title: 'Edit Pets',
+      content: StatefulBuilder(
+        builder: (context, setState) => Column(
+          children: PetOption.values
+              .map((pet) => CheckboxListTile(
+                    title: Text(pet.display,
+                        style: TextStyle(color: kTextPrimary)),
+                    value: selectedPets.contains(pet),
+                    onChanged: (value) {
+                      setState(() {
+                        if (value == true) {
+                          selectedPets.add(pet);
+                        } else {
+                          selectedPets.remove(pet);
+                        }
+                      });
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+      onSave: () {
+        setState(() {
+          _profile = _profile!.copyWith(pets: selectedPets);
+        });
+      },
+    );
+  }
+}
