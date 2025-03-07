@@ -9,7 +9,11 @@
   "dependencies": {
     "@azure/functions": "^3.5.1",
     "axios": "^1.6.7",
-    "crypto": "^1.0.1"
+    "crypto": "^1.0.1",
+    "adm-zip": "^0.5.10",
+    "form-data": "^4.0.0",
+    "fs-extra": "^11.2.0",
+    "tmp": "^0.2.1"
   },
   "devDependencies": {}
 } 
