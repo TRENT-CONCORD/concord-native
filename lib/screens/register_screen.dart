@@ -39,20 +39,27 @@ class _RegisterScreenState extends State<RegisterScreen> {
           email: _emailController.text.trim(),
           password: _passwordController.text.trim(),
         );
+
         if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(
-              builder: (context) => ProfileScreen(
-                uid: user.uid,
-              ),
-            ),
-          );
+          // Add a short delay to allow Firebase to complete its operations
+          await Future.delayed(const Duration(milliseconds: 500));
+
+          // Always reload the app to prevent pigeon errors
+          Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
         }
       } catch (e) {
         setState(() {
           _errorMessage = e.toString();
         });
+
+        // Log the error but still reload the app after a brief delay
+        debugPrint('Registration error: $e');
+
+        if (mounted) {
+          Future.delayed(const Duration(seconds: 1), () {
+            Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
+          });
+        }
       } finally {
         if (mounted) {
           setState(() {
