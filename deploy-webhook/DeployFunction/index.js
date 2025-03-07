@@ -62,23 +62,29 @@ module.exports = async function (context, req) {
             
             // Process and deploy the backend code
             if (branch === 'sandbox') {
+                // DEVELOPMENT ENVIRONMENT
                 const zipPath = await createDeploymentPackage(branch, tmpDir.name, context);
                 await deployToAzureWebApp(
                     'concord-dev',
                     'concord-api-dev',
                     zipPath,
                     process.env.SANDBOX_SUBSCRIPTION_ID || 'ff42a815-661f-4e1f-867b-6a99ca790307',
+                    'development',
                     context
                 );
+                context.log('Development deployment completed successfully');
             } else {
+                // PRODUCTION ENVIRONMENT
                 const zipPath = await createDeploymentPackage(branch, tmpDir.name, context);
                 await deployToAzureWebApp(
                     'concord-prod',
                     'concord-api',
                     zipPath,
-                    process.env.MAIN_SUBSCRIPTION_ID || 'unknown',
+                    process.env.MAIN_SUBSCRIPTION_ID,
+                    'production',
                     context
                 );
+                context.log('Production deployment completed successfully');
             }
             
             context.res = {
@@ -184,29 +190,38 @@ async function createDeploymentPackage(branch, tempDir, context) {
 }
 
 // Function to deploy to Azure Web App with NO BUILD
-async function deployToAzureWebApp(resourceGroup, webAppName, zipPath, subscriptionId, context) {
-    context.log(`Deploying to ${webAppName} in ${resourceGroup} (subscription: ${subscriptionId})`);
+async function deployToAzureWebApp(resourceGroup, webAppName, zipPath, subscriptionId, environment, context) {
+    context.log(`Deploying to ${webAppName} in ${resourceGroup} (subscription: ${subscriptionId}, environment: ${environment})`);
+    
+    if (!subscriptionId && environment === 'production') {
+        throw new Error('Production subscription ID is not configured. Please set MAIN_SUBSCRIPTION_ID in the function app settings.');
+    }
     
     try {
         // Use Kudu REST API for deployment with better control
         const kuduUrl = `https://${webAppName}.scm.azurewebsites.net/api/zipdeploy`;
         
-        // Get publishing credentials - we'll use environment variables for security
-        // In production, these should be stored in Azure Key Vault or as Function App settings
-        const publishingUser = process.env.PUBLISHING_USER || `$${webAppName}`;
-        const publishingPassword = process.env.PUBLISHING_PASSWORD;
+        // Get publishing credentials based on environment
+        let publishingUser, publishingPassword;
         
-        if (!publishingPassword) {
-            context.log.warn('PUBLISHING_PASSWORD not set, attempting to use deployment credentials from App Service');
+        if (environment === 'production') {
+            // Use production-specific credentials
+            publishingUser = process.env.PROD_PUBLISHING_USER || `$${webAppName}`;
+            publishingPassword = process.env.PROD_PUBLISHING_PASSWORD;
             
-            // Try to get publishing credentials using Azure CLI (requires managed identity)
-            try {
-                // Note: This requires the function to have proper permissions
-                // In a production scenario, these credentials should be obtained securely
-                const credentials = await getPublishingCredentials(webAppName, resourceGroup, subscriptionId, context);
+            if (!publishingPassword) {
+                context.log.error('Production publishing password is not configured. Please set PROD_PUBLISHING_PASSWORD in the function app settings.');
+                throw new Error('Production publishing credentials not configured');
+            }
+        } else {
+            // Use development credentials
+            publishingUser = process.env.DEV_PUBLISHING_USER || process.env.PUBLISHING_USER || `$${webAppName}`;
+            publishingPassword = process.env.DEV_PUBLISHING_PASSWORD || process.env.PUBLISHING_PASSWORD;
+            
+            if (!publishingPassword) {
+                // Try to get credentials from a secure source
+                const credentials = await getPublishingCredentials(webAppName, resourceGroup, subscriptionId, environment, context);
                 publishingPassword = credentials.publishingPassword;
-            } catch (credError) {
-                throw new Error(`Failed to get publishing credentials: ${credError.message}`);
             }
         }
         
@@ -248,21 +263,25 @@ async function deployToAzureWebApp(resourceGroup, webAppName, zipPath, subscript
 }
 
 // Helper function to get publishing credentials for an App Service
-async function getPublishingCredentials(webAppName, resourceGroup, subscriptionId, context) {
+async function getPublishingCredentials(webAppName, resourceGroup, subscriptionId, environment, context) {
     try {
         // Note: This approach requires the Azure Function to have an MSI (Managed Service Identity)
         // with appropriate permissions to read the publishing credentials
         
-        // In a real implementation, you might use @azure/arm-websites SDK instead
-        // For simplicity, we're simulating this part
-        context.log(`Getting publishing credentials for ${webAppName}`);
+        context.log(`Getting publishing credentials for ${webAppName} (${environment})`);
         
-        // For testing purposes, we'll use a dummy password
-        // In production, you should implement proper credential retrieval
-        return {
-            publishingUser: `$${webAppName}`,
-            publishingPassword: process.env.DEFAULT_PUBLISHING_PASSWORD || 'dummy-password'
-        };
+        // For testing purposes, we'll use environment-specific fallback passwords
+        if (environment === 'production') {
+            return {
+                publishingUser: `$${webAppName}`,
+                publishingPassword: process.env.DEFAULT_PROD_PASSWORD || process.env.DEFAULT_PUBLISHING_PASSWORD || 'dummy-prod-password'
+            };
+        } else {
+            return {
+                publishingUser: `$${webAppName}`,
+                publishingPassword: process.env.DEFAULT_DEV_PASSWORD || process.env.DEFAULT_PUBLISHING_PASSWORD || 'dummy-dev-password'
+            };
+        }
     } catch (error) {
         context.log.error(`Failed to get publishing credentials: ${error.message}`);
         throw error;
