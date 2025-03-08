@@ -4,17 +4,28 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/user_profile.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
+import '../main.dart'; // Import to access enableFirebase flag
+import 'dart:math';
+import '../models/profile_enums.dart';
 
 class ProfileService {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FirebaseStorage _storage = FirebaseStorage.instance;
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore? _firestore =
+      enableFirebase ? FirebaseFirestore.instance : null;
+  final FirebaseStorage? _storage =
+      enableFirebase ? FirebaseStorage.instance : null;
+  final FirebaseAuth? _auth = enableFirebase ? FirebaseAuth.instance : null;
 
   // Collection reference
-  CollectionReference get _users => _firestore.collection('users');
+  CollectionReference get _users => _firestore!.collection('users');
 
   // Create or update a user profile with proper error handling
   Future<void> updateProfile(UserProfile profile) async {
+    if (!enableFirebase) {
+      // Simulate profile update for development
+      debugPrint('DEV MODE: Simulating profile update for ${profile.uid}');
+      return;
+    }
+
     try {
       debugPrint('Updating profile for UID: ${profile.uid}');
 
@@ -70,6 +81,28 @@ class ProfileService {
 
   // Get a user profile by ID with better error handling and retry mechanism for pigeon errors
   Future<UserProfile?> getProfile(String uid) async {
+    if (!enableFirebase) {
+      // Return a mock profile for development mode
+      return UserProfile(
+        uid: uid,
+        displayName: 'Test User',
+        username: 'testuser',
+        lastActive: DateTime.now(),
+        lookingFor: [LookingForOption.notSureYet],
+        dateOfBirth: DateTime(1990, 1, 1),
+        gender: GenderOption.man,
+        mainPhotoUrl:
+            'https://randomuser.me/api/portraits/men/${Random().nextInt(50)}.jpg',
+        bio: 'This is a test profile for development mode',
+        additionalPhotos: [],
+        interests: [],
+        pets: [],
+        educationLevels: [],
+        communicationStyles: [],
+        loveLanguages: [],
+      );
+    }
+
     int retryCount = 0;
     const maxRetries = 2;
 
@@ -123,7 +156,7 @@ class ProfileService {
   // Upload a profile picture
   Future<String> uploadProfilePicture(String uid, File imageFile) async {
     try {
-      final ref = _storage.ref().child('profile_pictures/$uid.jpg');
+      final ref = _storage!.ref().child('profile_pictures/$uid.jpg');
       await ref.putFile(imageFile);
       final url = await ref.getDownloadURL();
       debugPrint('Profile picture uploaded: $url');
@@ -138,7 +171,7 @@ class ProfileService {
   Future<String> uploadAdditionalPhoto(
       String uid, File imageFile, int index) async {
     final ref =
-        _storage.ref().child('profile_pictures/$uid/additional_$index.jpg');
+        _storage!.ref().child('profile_pictures/$uid/additional_$index.jpg');
     await ref.putFile(imageFile);
     return await ref.getDownloadURL();
   }
@@ -147,7 +180,7 @@ class ProfileService {
   Future<void> deleteProfilePicture(String uid) async {
     try {
       debugPrint('Deleting profile picture for user: $uid');
-      final ref = _storage.ref().child('profile_pictures/$uid.jpg');
+      final ref = _storage!.ref().child('profile_pictures/$uid.jpg');
       await ref.delete();
     } catch (e) {
       // Ignore if file doesn't exist
@@ -159,7 +192,7 @@ class ProfileService {
   Future<void> deleteAdditionalPhoto(String uid, int index) async {
     try {
       final ref =
-          _storage.ref().child('profile_pictures/$uid/additional_$index.jpg');
+          _storage!.ref().child('profile_pictures/$uid/additional_$index.jpg');
       await ref.delete();
     } catch (e) {
       // Ignore if file doesn't exist
@@ -310,6 +343,12 @@ class ProfileService {
 
   // Delete a user's profile completely
   Future<void> deleteProfile(String uid) async {
+    if (!enableFirebase) {
+      // Simulate profile deletion for development
+      debugPrint('DEV MODE: Simulating profile deletion for $uid');
+      return;
+    }
+
     try {
       debugPrint('Starting deletion of profile with UID: $uid');
 
@@ -334,7 +373,7 @@ class ProfileService {
       debugPrint('Cancelling scheduled deletion for profile with UID: $uid');
 
       // Verify user is authenticated before attempting operation
-      if (_auth.currentUser == null) {
+      if (_auth!.currentUser == null) {
         throw 'Authentication required to cancel deletion. Please sign in first.';
       }
 
@@ -357,7 +396,7 @@ class ProfileService {
         // If simple update fails, try with transaction
         debugPrint('Simple update failed, trying transaction: $updateError');
 
-        await _firestore.runTransaction((transaction) async {
+        await _firestore!.runTransaction((transaction) async {
           // Get the current document first
           final docRef = _users.doc(uid);
           final docSnapshot = await transaction.get(docRef);

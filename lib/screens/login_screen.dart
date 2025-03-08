@@ -53,22 +53,21 @@ class _LoginScreenState extends State<LoginScreen> {
           debugPrint(
               'Attempting to sign in with email: ${_emailController.text.trim()}');
 
-          final user = await _authService.signInWithEmailAndPassword(
+          final userCredential = await _authService.signInWithEmailAndPassword(
             email: _emailController.text.trim(),
             password: _passwordController.text.trim(),
           );
 
-          if (mounted) {
-            debugPrint('Sign in successful, checking deletion status');
-            // Check if the account is scheduled for deletion
+          // Get the user from the userCredential or directly from AuthService
+          final user = _authService.currentUser;
+
+          // Check for account deletion status
+          if (user != null) {
             final deletionStatus =
                 await _authService.checkDeletionStatusDuringSignIn(user);
 
             if (deletionStatus['scheduledForDeletion'] == true) {
-              // Sign the user out immediately - we'll sign them back in if they choose to restore
-              await _authService.signOut();
-
-              // Navigate to the restoration screen
+              // Navigate to account restoration screen
               Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -77,18 +76,22 @@ class _LoginScreenState extends State<LoginScreen> {
                     daysRemaining: deletionStatus['daysRemaining'],
                     email: _emailController.text.trim(),
                     password: _passwordController.text.trim(),
+                    keepUserSignedIn: true,
                   ),
                 ),
               );
-            } else {
-              // Account is not scheduled for deletion, proceed with normal login
-              // Add a short delay to allow Firebase to complete its operations
-              await Future.delayed(const Duration(milliseconds: 500));
-
-              // Always reload the app to prevent pigeon errors
-              Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
+              return;
             }
+          } else {
+            throw Exception('Sign in failed - user is null');
           }
+
+          // If we get here, the account is not scheduled for deletion, proceed with login
+          // Add a short delay to allow Firebase to complete its operations
+          await Future.delayed(const Duration(milliseconds: 500));
+
+          // Always reload the app to prevent pigeon errors
+          Navigator.pushNamedAndRemoveUntil(context, '/', (route) => false);
         } catch (authError) {
           // Handle auth-specific errors
           debugPrint('Authentication specific error: $authError');

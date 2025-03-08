@@ -10,6 +10,9 @@ import 'package:flutter/gestures.dart';
 import 'package:geolocator/geolocator.dart'; // Import geolocator package
 import 'package:shared_preferences/shared_preferences.dart'; // Import shared_preferences for local storage
 import 'package:flutter_svg/flutter_svg.dart'; // Import flutter_svg for SVG support
+import 'dart:async'; // Import dart:async for Timer
+import 'dart:math';
+import '../services/api_service.dart'; // Import the API service
 
 class ExploreScreen extends StatefulWidget {
   @override
@@ -46,16 +49,18 @@ class _ExploreScreenState extends State<ExploreScreen>
   final ScrollController _scrollController = ScrollController();
   bool _isApiAvailable = true; // Track if API is available
 
-  // WebSocket channel for real-time updates
-  late WebSocketChannel _channel;
+  // API Service
+  final ApiService _apiService = ApiService();
 
-  String get _baseUrl {
-    const branch = String.fromEnvironment('BRANCH', defaultValue: 'sandbox');
-    if (branch == 'main') {
-      return 'https://api.concord.digital';
-    } else {
-      return 'https://api-dev.concord.digital';
-    }
+  // WebSocket channel for real-time updates
+  WebSocketChannel? _webSocketChannel;
+
+  // Dummy channel getter to prevent null issues
+  WebSocketChannel get _channel {
+    // Return a dummy channel if the real one isn't initialized
+    _webSocketChannel ??= IOWebSocketChannel.connect(
+        'ws://${_apiService.baseUrl.replaceFirst('https://', '')}/ws/explore');
+    return _webSocketChannel!;
   }
 
   @override
@@ -66,14 +71,17 @@ class _ExploreScreenState extends State<ExploreScreen>
       duration: Duration(milliseconds: 300),
     );
 
+    // Test API connectivity first
+    _testApiConnectivity();
+
     // Load saved filters
     _loadSavedFilter();
 
-    // Initialize WebSocket connection
-    _initializeWebSocket();
-
     // Get user's current location
     _getUserLocation();
+
+    // Initialize real-time updates system
+    _initializeRealTimeUpdates();
 
     // Load initial users
     _loadUsers();
@@ -86,7 +94,10 @@ class _ExploreScreenState extends State<ExploreScreen>
   void dispose() {
     _scrollController.dispose();
     _flyoutAnimationController.dispose();
-    _channel.sink.close(); // Close WebSocket connection
+
+    // Disconnect from WebSocket
+    _apiService.disconnectFromExploreWebSocket();
+
     super.dispose();
   }
 
@@ -133,18 +144,30 @@ class _ExploreScreenState extends State<ExploreScreen>
     });
 
     try {
-      final users = await _fetchUsers(_currentOffset, _pageSize);
+      // Build filters from selected options
+      final filters = _buildQueryParams();
+
+      // Get users from API service
+      final users = await _apiService.getExploreUsers(
+        offset: _currentOffset,
+        limit: _pageSize,
+        filters: filters,
+        latitude: userLatitude,
+        longitude: userLongitude,
+        maxDistance: maxDistance,
+      );
+
       setState(() {
         _users = users;
         _isLoading = false;
         _hasMoreUsers = users.length >= _pageSize;
         _currentOffset += users.length;
-        _isApiAvailable = true; // API is available
+        _isApiAvailable = _apiService.isApiAvailable;
       });
     } catch (e) {
       setState(() {
         _isLoading = false;
-        _isApiAvailable = false; // API is not available
+        _isApiAvailable = false;
       });
       debugPrint('Error loading users: $e');
     }
@@ -159,7 +182,18 @@ class _ExploreScreenState extends State<ExploreScreen>
     });
 
     try {
-      final users = await _fetchUsers(_currentOffset, _pageSize);
+      // Build filters from selected options
+      final filters = _buildQueryParams();
+
+      // Get more users from API service
+      final users = await _apiService.getExploreUsers(
+        offset: _currentOffset,
+        limit: _pageSize,
+        filters: filters,
+        latitude: userLatitude,
+        longitude: userLongitude,
+        maxDistance: maxDistance,
+      );
 
       setState(() {
         if (users.isEmpty) {
@@ -230,9 +264,13 @@ class _ExploreScreenState extends State<ExploreScreen>
     }
   }
 
+  // Save filter preferences
   Future<void> _saveFilter() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
+      // Get current user ID
+      final userId = await _getCurrentUserId();
+
+      // Build filter data
       final filterData = {
         'selectedGenders': selectedGenders.map((g) => g.name).toList(),
         'selectedSecondaryGenders': selectedSecondaryGenders,
@@ -252,32 +290,16 @@ class _ExploreScreenState extends State<ExploreScreen>
         'maxDistance': maxDistance,
       };
 
-      // Save filters locally
-      await prefs.setString('savedFilter', json.encode(filterData));
+      // Save filters using API service
+      final success = await _apiService.saveUserFilters(userId, filterData);
 
-      // Save filters to backend
-      final userId =
-          await _getCurrentUserId(); // Replace with actual user ID retrieval logic
-      final response = await http
-          .post(
-            Uri.parse('$_baseUrl/explore/filters'),
-            headers: {'Content-Type': 'application/json'},
-            body: json.encode({
-              'userId': userId,
-              'filters': filterData,
-            }),
-          )
-          .timeout(Duration(seconds: 10)); // Add timeout
-
-      if (response.statusCode == 200) {
+      if (success) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Filters saved successfully!'),
+            content: Text('Filters saved successfully'),
             backgroundColor: Colors.green,
           ),
         );
-      } else {
-        throw Exception('Failed to save filters to backend.');
       }
     } catch (e) {
       debugPrint('Error saving filters: $e');
@@ -290,59 +312,96 @@ class _ExploreScreenState extends State<ExploreScreen>
     }
   }
 
+  // Load saved filter preferences
   Future<void> _loadSavedFilter() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedFilter = prefs.getString('savedFilter');
+      // Get current user ID
+      final userId = await _getCurrentUserId();
 
-      if (savedFilter != null) {
-        final filterData = json.decode(savedFilter);
+      // Get filters from API service
+      final filterData = await _apiService.getUserFilters(userId);
+
+      if (filterData.isNotEmpty) {
         setState(() {
-          selectedGenders = (filterData['selectedGenders'] as List)
-              .map((g) => GenderOption.values.firstWhere((e) => e.name == g))
-              .toList();
-          ageRange = RangeValues(
-            (filterData['ageRange'][0] as int).toDouble(),
-            (filterData['ageRange'][1] as int).toDouble(),
-          );
-          selectedEducationLevels = (filterData['selectedEducationLevels']
-                  as List)
-              .map(
-                  (e) => EducationLevel.values.firstWhere((el) => el.name == e))
-              .toList();
-          selectedCommunicationStyles =
-              (filterData['selectedCommunicationStyles'] as List)
-                  .map((s) => CommunicationStyle.values
-                      .firstWhere((cs) => cs.name == s))
-                  .toList();
-          selectedLoveLanguages = (filterData['selectedLoveLanguages'] as List)
-              .map((l) => LoveLanguage.values.firstWhere((ll) => ll.name == l))
-              .toList();
-          selectedInterests = (filterData['selectedInterests'] as List)
-              .map((i) => Interest.values.firstWhere((iv) => iv.name == i))
-              .toList();
-          selectedSmokingHabit = filterData['selectedSmokingHabit'] != null
-              ? SmokingHabit.values.firstWhere(
-                  (sh) => sh.name == filterData['selectedSmokingHabit'])
-              : null;
-          selectedDrinkingHabit = filterData['selectedDrinkingHabit'] != null
-              ? DrinkingHabit.values.firstWhere(
-                  (dh) => dh.name == filterData['selectedDrinkingHabit'])
-              : null;
-          selectedWorkoutHabit = filterData['selectedWorkoutHabit'] != null
-              ? WorkoutHabit.values.firstWhere(
-                  (wh) => wh.name == filterData['selectedWorkoutHabit'])
-              : null;
-          selectedDietaryPreference = filterData['selectedDietaryPreference'] !=
-                  null
-              ? DietaryPreference.values.firstWhere(
-                  (dp) => dp.name == filterData['selectedDietaryPreference'])
-              : null;
-          selectedSleepingHabit = filterData['selectedSleepingHabit'] != null
-              ? SleepingHabit.values.firstWhere(
-                  (sh) => sh.name == filterData['selectedSleepingHabit'])
-              : null;
-          maxDistance = filterData['maxDistance'] as double;
+          // Parse gender filters
+          if (filterData['selectedGenders'] != null) {
+            selectedGenders = (filterData['selectedGenders'] as List)
+                .map((g) => GenderOption.values.firstWhere((e) => e.name == g))
+                .toList();
+          }
+
+          // Parse age range
+          if (filterData['ageRange'] != null) {
+            ageRange = RangeValues(
+              (filterData['ageRange'][0] as int).toDouble(),
+              (filterData['ageRange'][1] as int).toDouble(),
+            );
+          }
+
+          // Parse education levels
+          if (filterData['selectedEducationLevels'] != null) {
+            selectedEducationLevels =
+                (filterData['selectedEducationLevels'] as List)
+                    .map((e) =>
+                        EducationLevel.values.firstWhere((el) => el.name == e))
+                    .toList();
+          }
+
+          // Parse communication styles
+          if (filterData['selectedCommunicationStyles'] != null) {
+            selectedCommunicationStyles =
+                (filterData['selectedCommunicationStyles'] as List)
+                    .map((s) => CommunicationStyle.values
+                        .firstWhere((cs) => cs.name == s))
+                    .toList();
+          }
+
+          // Parse love languages
+          if (filterData['selectedLoveLanguages'] != null) {
+            selectedLoveLanguages = (filterData['selectedLoveLanguages']
+                    as List)
+                .map(
+                    (l) => LoveLanguage.values.firstWhere((ll) => ll.name == l))
+                .toList();
+          }
+
+          // Parse interests
+          if (filterData['selectedInterests'] != null) {
+            selectedInterests = (filterData['selectedInterests'] as List)
+                .map((i) => Interest.values.firstWhere((iv) => iv.name == i))
+                .toList();
+          }
+
+          // Parse habits
+          if (filterData['selectedSmokingHabit'] != null) {
+            selectedSmokingHabit = SmokingHabit.values.firstWhere(
+                (sh) => sh.name == filterData['selectedSmokingHabit']);
+          }
+
+          if (filterData['selectedDrinkingHabit'] != null) {
+            selectedDrinkingHabit = DrinkingHabit.values.firstWhere(
+                (dh) => dh.name == filterData['selectedDrinkingHabit']);
+          }
+
+          if (filterData['selectedWorkoutHabit'] != null) {
+            selectedWorkoutHabit = WorkoutHabit.values.firstWhere(
+                (wh) => wh.name == filterData['selectedWorkoutHabit']);
+          }
+
+          if (filterData['selectedDietaryPreference'] != null) {
+            selectedDietaryPreference = DietaryPreference.values.firstWhere(
+                (dp) => dp.name == filterData['selectedDietaryPreference']);
+          }
+
+          if (filterData['selectedSleepingHabit'] != null) {
+            selectedSleepingHabit = SleepingHabit.values.firstWhere(
+                (sh) => sh.name == filterData['selectedSleepingHabit']);
+          }
+
+          // Parse max distance
+          if (filterData['maxDistance'] != null) {
+            maxDistance = (filterData['maxDistance'] as num).toDouble();
+          }
         });
       }
     } catch (e) {
@@ -350,41 +409,76 @@ class _ExploreScreenState extends State<ExploreScreen>
     }
   }
 
-  Future<void> _loadSavedFilters() async {
-    final prefs = await SharedPreferences.getInstance();
-
+  // Test API connectivity
+  Future<void> _testApiConnectivity() async {
+    final isAvailable = await _apiService.testConnectivity();
     setState(() {
-      selectedGenders = (prefs.getStringList('selectedGenders') ?? [])
-          .map((e) => GenderOption.values.firstWhere((g) => g.toString() == e))
-          .toList();
-      ageRange = RangeValues(
-        prefs.getDouble('minAge') ?? 18,
-        prefs.getDouble('maxAge') ?? 40,
-      );
-      maxDistance = prefs.getDouble('maxDistance') ?? 50;
-      // Load other filters similarly...
+      _isApiAvailable = isAvailable;
     });
   }
 
-  Future<void> _saveFilters() async {
-    final prefs = await SharedPreferences.getInstance();
+  // Initialize real-time updates
+  Future<void> _initializeRealTimeUpdates() async {
+    try {
+      // Get current user ID
+      final userId = await _getCurrentUserId();
 
-    await prefs.setStringList(
-        'selectedGenders', selectedGenders.map((e) => e.toString()).toList());
-    await prefs.setDouble('minAge', ageRange.start);
-    await prefs.setDouble('maxAge', ageRange.end);
-    await prefs.setDouble('maxDistance', maxDistance);
-    // Save other filters similarly...
+      // Connect to WebSocket for real-time updates
+      final connected = await _apiService.connectToExploreWebSocket(userId);
+
+      if (connected) {
+        debugPrint('Successfully connected to real-time updates');
+
+        // Listen for WebSocket events
+        _apiService.wsEvents.listen((data) {
+          if (data['event'] == 'userUpdated') {
+            _handleUserUpdated(data['user']);
+          } else if (data['event'] == 'newUser') {
+            _handleNewUser(data['user']);
+          }
+        });
+      } else {
+        debugPrint(
+            'Failed to connect to real-time updates, using polling fallback');
+        _startPollingFallback();
+      }
+    } catch (e) {
+      debugPrint('Error initializing real-time updates: $e');
+      _startPollingFallback();
+    }
   }
 
-  void _resetFilters() {
-    setState(() {
-      selectedGenders = [];
-      ageRange = RangeValues(18, 40);
-      maxDistance = 50;
-      // Reset other filters to default values...
+  // Fallback to polling if WebSocket is not available
+  Timer? _pollingTimer;
+
+  void _startPollingFallback() {
+    // Cancel existing timer if any
+    _pollingTimer?.cancel();
+
+    // Poll for updates every 30 seconds
+    _pollingTimer = Timer.periodic(Duration(seconds: 30), (timer) {
+      if (mounted) {
+        _loadUsers();
+      } else {
+        timer.cancel();
+      }
     });
-    _saveFilters();
+  }
+
+  Future<String> _getCurrentUserId() async {
+    // Try to get user ID from SharedPreferences
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String? userId = prefs.getString('userId');
+      if (userId != null && userId.isNotEmpty) {
+        return userId;
+      }
+    } catch (e) {
+      debugPrint('Error getting user ID from SharedPreferences: $e');
+    }
+
+    // Default placeholder value
+    return 'user-${DateTime.now().millisecondsSinceEpoch}';
   }
 
   @override
@@ -1197,197 +1291,131 @@ class _ExploreScreenState extends State<ExploreScreen>
     );
   }
 
-  Future<List<Map<String, dynamic>>> _fetchUsers(
-      [int offset = 0, int limit = 20]) async {
-    int retryCount = 0;
-    const maxRetries = 3;
+  Widget _buildSvgImage(String imageUrl) {
+    // Check if URL is valid
+    if (imageUrl.isEmpty) {
+      return Container(
+        color: Color(0xFF1A0033),
+        child: Icon(
+          Icons.person,
+          size: 80,
+          color: Colors.white70,
+        ),
+      );
+    }
 
-    while (retryCount < maxRetries) {
+    // Check if it's a local file path (usually SVG)
+    if (imageUrl.startsWith('/') || imageUrl.startsWith('assets/')) {
       try {
-        // Build query parameters based on selected filters
-        Map<String, dynamic> queryParams = _buildQueryParams();
-
-        // Add pagination parameters
-        queryParams['limit'] = limit;
-        queryParams['offset'] = offset;
-
-        // Use the dynamic base URL
-        final Uri uri = Uri.parse('$_baseUrl/explore').replace(
-          queryParameters:
-              queryParams.map((key, value) => MapEntry(key, value.toString())),
+        return SvgPicture.asset(
+          imageUrl,
+          placeholderBuilder: (BuildContext context) => Container(
+            color: Colors.grey[900],
+            child: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFCC0AE6)),
+              ),
+            ),
+          ),
         );
-
-        debugPrint('Fetching users with URI: $uri');
-
-        final response = await http.get(
-          uri,
-          headers: {
-            'Content-Type': 'application/json',
-            // Add authorization token if you have it
-            // 'Authorization': 'Bearer $token',
-          },
-        ).timeout(Duration(seconds: 10)); // Add timeout to prevent long waiting
-
-        if (response.statusCode == 200) {
-          try {
-            final List<dynamic> data = json.decode(response.body);
-            return data
-                .map<Map<String, dynamic>>((user) => {
-                      'id': user['id'].toString(),
-                      'name': user['displayName'].toString(),
-                      'age': user['age'].toString(),
-                      'distance': user['distance'].toString(),
-                      'photoUrl': user['photoUrl']?.toString() ?? '',
-                      'genders': user['genders'] != null
-                          ? List<String>.from(user['genders'])
-                          : <String>[],
-                      // Add other user properties you want to display
-                    })
-                .toList();
-          } catch (e) {
-            debugPrint('Error parsing JSON: $e');
-            debugPrint('Response body: ${response.body}');
-            setState(() {
-              _isApiAvailable = false;
-            });
-            return _getMockUsers(offset, limit);
-          }
-        } else {
-          debugPrint(
-              'Error: Unexpected response status: ${response.statusCode}');
-          debugPrint('Response body: ${response.body}');
-          setState(() {
-            _isApiAvailable = false;
-          });
-          return _getMockUsers(offset, limit);
-        }
       } catch (e) {
-        retryCount++;
-        debugPrint('Error fetching users (attempt $retryCount): $e');
-        if (retryCount >= maxRetries) {
-          setState(() {
-            _isApiAvailable = false;
-          });
-          return _getMockUsers(offset, limit);
-        }
-        await Future.delayed(Duration(seconds: 2)); // Wait before retrying
+        debugPrint('Error loading local SVG: $e');
+        // Fall back to network image if SVG loading fails
       }
     }
 
-    // Fallback in case of unexpected failure
-    return _getMockUsers(offset, limit);
+    // Handle remote images
+    if (imageUrl.toLowerCase().endsWith('.svg')) {
+      // Handle SVG network images
+      try {
+        return SvgPicture.network(
+          imageUrl,
+          placeholderBuilder: (BuildContext context) => Container(
+            color: Colors.grey[900],
+            child: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFCC0AE6)),
+              ),
+            ),
+          ),
+        );
+      } catch (e) {
+        debugPrint('Error loading SVG from network: $e');
+        // Fall back to regular image if SVG loading fails
+      }
+    }
+
+    // For normal image URLs, use Image.network
+    try {
+      return Image.network(
+        imageUrl,
+        fit: BoxFit.cover,
+        loadingBuilder: (context, child, loadingProgress) {
+          if (loadingProgress == null) return child;
+          return Container(
+            color: Colors.grey[900],
+            child: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFCC0AE6)),
+                value: loadingProgress.expectedTotalBytes != null
+                    ? loadingProgress.cumulativeBytesLoaded /
+                        loadingProgress.expectedTotalBytes!
+                    : null,
+              ),
+            ),
+          );
+        },
+        errorBuilder: (context, error, stackTrace) {
+          debugPrint('Error loading image: $error');
+          return Container(
+            color: Colors.grey[900],
+            child: Icon(
+              Icons.broken_image,
+              color: Colors.white70,
+              size: 80,
+            ),
+          );
+        },
+      );
+    } catch (e) {
+      debugPrint('Error constructing image widget: $e');
+      return Container(
+        color: Colors.grey[900],
+        child: Icon(
+          Icons.broken_image,
+          color: Colors.white70,
+          size: 80,
+        ),
+      );
+    }
   }
 
-  // Mock data for when the backend is not available
-  List<Map<String, dynamic>> _getMockUsers([int offset = 0, int limit = 20]) {
-    final allMockUsers = [
-      {
-        'id': '1',
-        'name': 'John Doe',
-        'age': '28',
-        'distance': '5 km',
-        'photoUrl': 'https://picsum.photos/id/1/200/300',
-        'genders': ['Man'],
-      },
-      {
-        'id': '2',
-        'name': 'Jane Smith',
-        'age': '26',
-        'distance': '3 km',
-        'photoUrl': 'https://picsum.photos/id/1025/200/300',
-        'genders': ['Woman'],
-      },
-      {
-        'id': '3',
-        'name': 'Alex Johnson',
-        'age': '31',
-        'distance': '8 km',
-        'photoUrl': 'https://picsum.photos/id/1027/200/300',
-        'genders': ['Beyond Binary'],
-      },
-      {
-        'id': '4',
-        'name': 'Emily Chen',
-        'age': '24',
-        'distance': '6 km',
-        'photoUrl': 'https://picsum.photos/id/1062/200/300',
-        'genders': ['Woman'],
-      },
-      {
-        'id': '5',
-        'name': 'Michael Brown',
-        'age': '32',
-        'distance': '10 km',
-        'photoUrl': 'https://picsum.photos/id/1074/200/300',
-        'genders': ['Man'],
-      },
-      {
-        'id': '6',
-        'name': 'Sarah Wilson',
-        'age': '29',
-        'distance': '4 km',
-        'photoUrl': 'https://picsum.photos/id/64/200/300',
-        'genders': ['Woman'],
-      },
-      {
-        'id': '7',
-        'name': 'David Lee',
-        'age': '33',
-        'distance': '7 km',
-        'photoUrl': 'https://picsum.photos/id/91/200/300',
-        'genders': ['Man'],
-      },
-      {
-        'id': '8',
-        'name': 'Taylor Morgan',
-        'age': '27',
-        'distance': '2 km',
-        'photoUrl': 'https://picsum.photos/id/180/200/300',
-        'genders': ['Beyond Binary'],
-      },
-      {
-        'id': '9',
-        'name': 'Olivia Parker',
-        'age': '25',
-        'distance': '9 km',
-        'photoUrl': 'https://picsum.photos/id/342/200/300',
-        'genders': ['Woman'],
-      },
-      {
-        'id': '10',
-        'name': 'Nathan Rodriguez',
-        'age': '30',
-        'distance': '1 km',
-        'photoUrl': 'https://picsum.photos/id/823/200/300',
-        'genders': ['Man'],
-      },
-    ];
-
-    final mockUsers = allMockUsers
-        .where((user) {
-          // Apply filters to mock data to simulate API behavior
-          final gender =
-              user['genders'] != null && (user['genders'] as List).isNotEmpty
-                  ? (user['genders'] as List)[0]
-                  : '';
-          final age = int.tryParse(user['age'] as String) ?? 25;
-
-          bool genderMatch = selectedGenders.isEmpty ||
-              selectedGenders.any((g) => g.display == gender);
-
-          bool ageMatch = age >= ageRange.start && age <= ageRange.end;
-
-          return genderMatch && ageMatch;
-        })
-        .skip(offset)
-        .take(limit)
-        .toList();
-
-    // Simulate pagination by returning limited results
-    return mockUsers;
+  List<String> _getSecondaryGenderOptions() {
+    List<String> options = [];
+    if (selectedGenders.contains(GenderOption.man)) {
+      options.addAll(GenderSubOptionMan.values.map((e) => e.display));
+    }
+    if (selectedGenders.contains(GenderOption.woman)) {
+      options.addAll(GenderSubOptionWoman.values.map((e) => e.display));
+    }
+    if (selectedGenders.contains(GenderOption.beyondBinary)) {
+      options.addAll(GenderSubOptionBeyondBinary.values.map((e) => e.display));
+    }
+    return options;
   }
 
-  // Build query parameters based on selected filters
+  List<String> _getSecondaryGenderOptionsForPrimary(GenderOption primary) {
+    List<String> options = [];
+    if (primary == GenderOption.man) {
+      options.addAll(GenderSubOptionMan.values.map((e) => e.display));
+    } else if (primary == GenderOption.woman) {
+      options.addAll(GenderSubOptionWoman.values.map((e) => e.display));
+    } else if (primary == GenderOption.beyondBinary) {
+      options.addAll(GenderSubOptionBeyondBinary.values.map((e) => e.display));
+    }
+    return options;
+  }
+
   Map<String, dynamic> _buildQueryParams() {
     Map<String, dynamic> params = {};
 
@@ -1452,129 +1480,6 @@ class _ExploreScreenState extends State<ExploreScreen>
     }
 
     return params;
-  }
-
-  List<String> _getSecondaryGenderOptions() {
-    List<String> options = [];
-    if (selectedGenders.contains(GenderOption.man)) {
-      options.addAll(GenderSubOptionMan.values.map((e) => e.display));
-    }
-    if (selectedGenders.contains(GenderOption.woman)) {
-      options.addAll(GenderSubOptionWoman.values.map((e) => e.display));
-    }
-    if (selectedGenders.contains(GenderOption.beyondBinary)) {
-      options.addAll(GenderSubOptionBeyondBinary.values.map((e) => e.display));
-    }
-    return options;
-  }
-
-  List<String> _getSecondaryGenderOptionsForPrimary(GenderOption primary) {
-    List<String> options = [];
-    if (primary == GenderOption.man) {
-      options.addAll(GenderSubOptionMan.values.map((e) => e.display));
-    } else if (primary == GenderOption.woman) {
-      options.addAll(GenderSubOptionWoman.values.map((e) => e.display));
-    } else if (primary == GenderOption.beyondBinary) {
-      options.addAll(GenderSubOptionBeyondBinary.values.map((e) => e.display));
-    }
-    return options;
-  }
-
-  void _initializeWebSocket() {
-    try {
-      // Validate and correct the WebSocket URL
-      String webSocketUrl = _baseUrl
-          .replaceFirst('https://', 'wss://')
-          .replaceFirst('http://', 'ws://')
-          .replaceAll('/api', ''); // Remove '/api' if present
-
-      if (!webSocketUrl.endsWith('/explore')) {
-        webSocketUrl = '$webSocketUrl/explore';
-      }
-
-      debugPrint('Connecting to WebSocket URL: $webSocketUrl');
-
-      _channel = IOWebSocketChannel.connect(webSocketUrl);
-
-      // Listen for WebSocket messages
-      _channel.stream.listen(
-        (message) {
-          final data = json.decode(message);
-          if (data['event'] == 'userUpdated') {
-            _handleUserUpdated(data['user']);
-          } else if (data['event'] == 'newUser') {
-            _handleNewUser(data['user']);
-          }
-        },
-        onError: (error) {
-          debugPrint('WebSocket error: $error');
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showWebSocketError();
-          });
-          _retryWebSocketConnection();
-        },
-        onDone: () {
-          debugPrint('WebSocket connection closed. Retrying...');
-          _retryWebSocketConnection();
-        },
-      );
-    } catch (e) {
-      debugPrint('Error initializing WebSocket: $e');
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showWebSocketError();
-      });
-      _retryWebSocketConnection();
-    }
-  }
-
-  void _retryWebSocketConnection() {
-    Future.delayed(Duration(seconds: 5), () {
-      if (mounted) {
-        debugPrint('Retrying WebSocket connection...');
-        _initializeWebSocket();
-      }
-    });
-  }
-
-  void _showWebSocketError() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Failed to connect to real-time updates. Retrying...'),
-        backgroundColor: Colors.red,
-      ),
-    );
-  }
-
-  Future<String> _getCurrentUserId() async {
-    // Placeholder implementation for user ID retrieval
-    // Replace this with actual logic to fetch the current user ID
-    return 'placeholderUserId';
-  }
-
-  Widget _buildSvgImage(String svgPath) {
-    try {
-      return SvgPicture.asset(
-        svgPath,
-        placeholderBuilder: (BuildContext context) => Container(
-          color: Colors.grey[900],
-          child: Center(
-            child: CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFCC0AE6)),
-            ),
-          ),
-        ),
-      );
-    } catch (e) {
-      debugPrint('Error loading SVG: $e');
-      return Container(
-        color: Colors.grey[900],
-        child: Icon(
-          Icons.broken_image,
-          color: Colors.white70,
-          size: 80,
-        ),
-      );
-    }
   }
 }
 

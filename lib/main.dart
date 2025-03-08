@@ -6,6 +6,7 @@ import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/explore_screen.dart';
 import 'screens/account_restoration_screen.dart';
 import 'services/auth_service.dart';
 import 'services/profile_service.dart';
@@ -16,92 +17,65 @@ import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_app_check/firebase_app_check.dart';
+import 'dart:io';
+import 'services/api_service.dart';
+
+// Add a flag to control Firebase initialization
+bool enableFirebase = false; // Set to false for now to focus on API testing
 
 Future<void> initializeFirebase() async {
   try {
-    // Initialize Firebase first
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
+    await Firebase.initializeApp();
 
-    // Set up debug configurations in debug mode
-    if (kDebugMode) {
-      debugPrint("Running in debug mode - enabling debug settings");
-      // Skip using emulator since we're having connectivity issues
-      // Just disable verification instead
-      await FirebaseAuth.instance.setSettings(
-        appVerificationDisabledForTesting: true,
-        phoneNumber: null,
-        smsCode: null,
-        forceRecaptchaFlow: false,
+    // Only proceed with app check if Firebase is successfully initialized
+    if (!kDebugMode || Platform.isIOS) {
+      await FirebaseAppCheck.instance.activate(
+        // Use a debug provider for development to avoid errors
+        androidProvider: AndroidProvider.debug,
+        appleProvider: AppleProvider.debug,
       );
-
-      // NOTE: Disabling the emulator connections because they're causing issues
-      // If you need to use emulators, uncomment these lines
-      /*
-      try {
-        FirebaseAuth.instance.useAuthEmulator('localhost', 9099);
-        FirebaseFirestore.instance.useFirestoreEmulator('localhost', 8080);
-        FirebaseStorage.instance.useStorageEmulator('localhost', 9199);
-        debugPrint("Firebase emulators connected");
-      } catch (e) {
-        debugPrint('Error setting up emulators: $e');
-      }
-      */
+      debugPrint('Activated Firebase App Check with Debug Provider');
+    } else {
+      debugPrint('Disabled app verification for testing mode');
     }
 
-    // Initialize App Check with appropriate provider
-    try {
-      if (kDebugMode) {
-        // Use debug provider for development
-        await FirebaseAppCheck.instance.activate(
-          androidProvider: AndroidProvider.debug,
-          appleProvider: AppleProvider.debug,
-        );
+    // Enable auto refresh token
+    await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
+    debugPrint('App Check token auto-refresh enabled');
+  } catch (e) {
+    debugPrint('Error initializing Firebase: $e');
+    // Continue without Firebase
+  }
+}
 
-        // Explicitly set App Verification disabled for testing
-        await FirebaseAuth.instance.setSettings(
-          appVerificationDisabledForTesting: true,
-          phoneNumber: null,
-          smsCode: null,
-          forceRecaptchaFlow: false,
-        );
-
-        debugPrint('Activated Firebase App Check with Debug Provider');
-        debugPrint('Disabled app verification for testing mode');
-      } else {
-        // Use Play Integrity for production
-        await FirebaseAppCheck.instance.activate(
-          androidProvider: AndroidProvider.playIntegrity,
-        );
-        debugPrint('Activated Firebase App Check with Play Integrity');
-      }
-
-      // Enable token auto-refresh for App Check
-      await FirebaseAppCheck.instance.setTokenAutoRefreshEnabled(true);
-      debugPrint('App Check token auto-refresh enabled');
-    } catch (appCheckError) {
-      debugPrint('Error activating App Check: $appCheckError');
-      // Try again with debug provider as fallback
-      try {
-        await FirebaseAppCheck.instance.activate(
-          androidProvider: AndroidProvider.debug,
-        );
-        debugPrint(
-            'Activated Firebase App Check with Debug Provider (fallback)');
-      } catch (fallbackError) {
-        debugPrint('Fatal App Check error: $fallbackError');
-      }
+// Initialize API service
+Future<void> initializeApiService() async {
+  try {
+    final apiService = ApiService();
+    final isAvailable = await apiService.testConnectivity();
+    if (isAvailable) {
+      debugPrint('👍 API service is available');
+    } else {
+      debugPrint('⚠️ API service is not available, using mock data');
     }
   } catch (e) {
-    debugPrint('Fatal error initializing Firebase: $e');
-    throw e; // Rethrow to handle in the app
+    debugPrint('⚠️ Error initializing API service: $e');
   }
 }
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await initializeFirebase();
+
+  // Only initialize Firebase if enabled
+  if (enableFirebase) {
+    await initializeFirebase();
+  } else {
+    debugPrint('Firebase initialization skipped for development');
+  }
+
+  // Initialize API service
+  await initializeApiService();
+
   runApp(const MyApp());
 }
 
@@ -135,6 +109,13 @@ class MyApp extends StatelessWidget {
       initialRoute: '/',
       onGenerateRoute: (settings) {
         if (settings.name == '/profile') {
+          // If Firebase is disabled, just show the profile screen with a mock ID
+          if (!enableFirebase) {
+            return MaterialPageRoute(
+              builder: (context) => ProfileScreen(uid: 'dev-user-id'),
+            );
+          }
+
           // First check if a user is logged in
           final authService = AuthService();
           if (authService.currentUser == null) {
@@ -152,10 +133,12 @@ class MyApp extends StatelessWidget {
         return null;
       },
       routes: {
-        '/': (context) => const AuthWrapper(),
+        '/': (context) =>
+            enableFirebase ? const AuthWrapper() : ExploreScreen(),
         '/login': (context) => const LoginScreen(),
         '/register': (context) => const RegisterScreen(),
         '/home': (context) => const HomeScreen(),
+        '/explore': (context) => ExploreScreen(),
       },
     );
   }
@@ -166,6 +149,11 @@ class AuthWrapper extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Skip Firebase auth if not enabled
+    if (!enableFirebase) {
+      return ExploreScreen(); // Removed const
+    }
+
     return StreamBuilder(
       stream: AuthService().authStateChanges,
       builder: (context, snapshot) {
@@ -273,8 +261,8 @@ class AuthWrapper extends StatelessWidget {
                     }
                   }
 
-                  // Profile is complete, go to home screen
-                  return const HomeScreen();
+                  // Profile is complete, go to explore screen
+                  return ExploreScreen(); // Removed const
                 },
               );
             },

@@ -1,87 +1,59 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
+import '../main.dart'; // Import to access enableFirebase flag
 
 class AuthService {
-  final FirebaseAuth _auth = FirebaseAuth.instance;
+  // Create a Firebase Auth instance only if Firebase is enabled
+  final FirebaseAuth? _auth = enableFirebase ? FirebaseAuth.instance : null;
+  final FirebaseFirestore? _firestore =
+      enableFirebase ? FirebaseFirestore.instance : null;
 
   // Get current user
-  User? get currentUser => _auth.currentUser;
+  User? get currentUser => _auth?.currentUser;
 
   // Auth state changes stream
-  Stream<User?> get authStateChanges => _auth.authStateChanges();
+  Stream<User?>? get authStateChanges => _auth?.authStateChanges();
 
   // Sign in with email and password
-  Future<User> signInWithEmailAndPassword({
+  Future<UserCredential?> signInWithEmailAndPassword({
     required String email,
     required String password,
   }) async {
+    if (!enableFirebase) {
+      // Simulate successful sign-in for development
+      debugPrint('DEV MODE: Simulating sign in for $email');
+      return null;
+    }
+
     try {
-      // In debug mode, we bypass reCAPTCHA verification
-      if (kDebugMode) {
-        // Make sure settings are applied
-        await _auth.setSettings(
-          appVerificationDisabledForTesting: true,
-          phoneNumber: null,
-          smsCode: null,
-          forceRecaptchaFlow: false,
-        );
-
-        debugPrint('Logging in as $email with verification disabled');
-      }
-
-      // Add a small delay before attempting login to allow settings to apply
-      await Future.delayed(const Duration(milliseconds: 300));
-
-      // Attempt login with retries in debug mode
-      int retryCount = 0;
-      const maxRetries = 3;
-      User? user;
-
-      while (retryCount < maxRetries) {
-        try {
-          final result = await _auth.signInWithEmailAndPassword(
-            email: email,
-            password: password,
-          );
-          user = result.user;
-          break; // Success, exit the retry loop
-        } catch (signInError) {
-          retryCount++;
-          debugPrint('Sign-in attempt $retryCount failed: $signInError');
-
-          if (retryCount < maxRetries) {
-            // Wait a bit longer before each retry
-            await Future.delayed(Duration(milliseconds: 500 * retryCount));
-            continue;
-          }
-
-          // If we've exhausted retries, rethrow the last error
-          rethrow;
-        }
-      }
-
-      if (user == null) {
-        throw Exception('Failed to sign in after $maxRetries attempts');
-      }
-
-      return user;
+      return await _auth!.signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
     } catch (e) {
-      debugPrint('Auth error: $e');
-      throw _handleAuthException(e);
+      debugPrint('Error signing in: $e');
+      rethrow;
     }
   }
 
   // Register with email and password
-  Future<User> registerWithEmailAndPassword({
+  Future<UserCredential?> registerWithEmailAndPassword({
     required String email,
     required String password,
   }) async {
+    if (!enableFirebase) {
+      // Simulate successful registration for development
+      debugPrint('DEV MODE: Simulating registration for $email');
+      return null;
+    }
+
     try {
       // In debug mode, we bypass reCAPTCHA verification
       if (kDebugMode) {
         // Make sure settings are applied
-        await _auth.setSettings(
+        await _auth!.setSettings(
           appVerificationDisabledForTesting: true,
           phoneNumber: null,
           smsCode: null,
@@ -90,11 +62,11 @@ class AuthService {
       }
 
       // Attempt registration
-      final result = await _auth.createUserWithEmailAndPassword(
+      final result = await _auth!.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
-      return result.user!;
+      return result;
     } catch (e) {
       debugPrint('Auth error: $e');
       throw _handleAuthException(e);
@@ -103,9 +75,14 @@ class AuthService {
 
   // Sign out
   Future<void> signOut() async {
+    if (!enableFirebase) {
+      debugPrint('DEV MODE: Simulating sign out');
+      return;
+    }
+
     try {
       // Clear any material banners before signing out
-      await _auth.signOut();
+      await _auth!.signOut();
       debugPrint('User signed out');
     } catch (e) {
       debugPrint('Error signing out: $e');
@@ -117,14 +94,14 @@ class AuthService {
   Future<void> deleteAccount() async {
     try {
       // Get current user
-      final user = _auth.currentUser;
+      final user = _auth?.currentUser;
       if (user != null) {
         debugPrint('Processing account deletion for: ${user.email}');
 
         // Instead of deleting the account immediately, just sign the user out
         // The actual deletion will happen after the 90-day grace period
         // The profile data is already marked for deletion in ProfileService.deleteProfile
-        await _auth.signOut();
+        await _auth!.signOut();
         debugPrint('User signed out as part of account deletion process');
 
         // Note: We're NOT calling user.delete() here anymore
@@ -141,75 +118,44 @@ class AuthService {
   // Check if a user is in the deletion period during sign in
   Future<Map<String, dynamic>> checkDeletionStatusDuringSignIn(
       User user) async {
-    try {
-      // This would typically call to your ProfileService to check deletion status
-      // For now, we'll just return a placeholder
-      // In a real implementation, you would inject the ProfileService or use a service locator
-
-      // Placeholder for the actual implementation
-      final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-      final doc = await _firestore.collection('users').doc(user.uid).get();
-
-      if (!doc.exists || doc.data() == null) {
-        return {'scheduledForDeletion': false, 'daysRemaining': 0};
-      }
-
-      final data = doc.data() as Map<String, dynamic>;
-      final bool isScheduledForDeletion =
-          data['scheduledForDeletion'] as bool? ?? false;
-
-      if (!isScheduledForDeletion) {
-        return {'scheduledForDeletion': false, 'daysRemaining': 0};
-      }
-
-      // Calculate days remaining
-      final deletionScheduledAt = data['deletionScheduledAt'] != null
-          ? DateTime.parse(data['deletionScheduledAt'] as String)
-          : null;
-
-      if (deletionScheduledAt == null) {
-        return {
-          'scheduledForDeletion': true,
-          'daysRemaining': 90 // Default to 90 days if no date is set
-        };
-      }
-
-      final DateTime deletionDate = deletionScheduledAt.add(Duration(days: 90));
-
-      // Calculate days remaining with the ceiling function to ensure users get the full 90 days
-      // This rounds up any partial day to ensure they get at minimum 90 days
-      final Duration difference = deletionDate.difference(DateTime.now());
-
-      // Calculate the hours since deletion was scheduled
-      final Duration timeElapsed =
-          DateTime.now().difference(deletionScheduledAt);
-      final int hoursElapsed = timeElapsed.inHours;
-
-      // If deletion was scheduled less than 24 hours ago, always show 90 days
-      final int daysRemaining;
-      if (hoursElapsed < 24) {
-        daysRemaining = 90;
-        debugPrint('Deletion scheduled recently, showing exactly 90 days');
-      } else {
-        daysRemaining = (difference.inHours / 24).ceil();
-      }
-
-      debugPrint('Deletion scheduled at: $deletionScheduledAt');
-      debugPrint('Deletion will occur on: $deletionDate');
-      debugPrint('Time difference in hours: ${difference.inHours}');
-      debugPrint('Hours elapsed since scheduling: $hoursElapsed');
-      debugPrint('Showing days remaining: $daysRemaining');
-
-      return {
-        'scheduledForDeletion': true,
-        'daysRemaining': daysRemaining > 0 ? daysRemaining : 0
-      };
-    } catch (e) {
-      debugPrint('Error checking deletion status during sign in: $e');
+    if (!enableFirebase) {
+      // Return a default response for development
       return {
         'scheduledForDeletion': false,
         'daysRemaining': 0,
-        'error': e.toString()
+      };
+    }
+
+    try {
+      final docSnapshot =
+          await _firestore!.collection('deletionRequests').doc(user.uid).get();
+
+      if (docSnapshot.exists) {
+        final data = docSnapshot.data() as Map<String, dynamic>;
+        final deletionTimestamp = data['deletionTimestamp'] as Timestamp;
+        final currentTime = Timestamp.now();
+
+        // Calculate days remaining until deletion
+        final difference =
+            deletionTimestamp.toDate().difference(currentTime.toDate());
+        final daysRemaining = difference.inDays;
+
+        return {
+          'scheduledForDeletion': true,
+          'daysRemaining': daysRemaining,
+        };
+      }
+
+      return {
+        'scheduledForDeletion': false,
+        'daysRemaining': 0,
+      };
+    } catch (e) {
+      debugPrint('Error checking deletion status: $e');
+      // In case of error, return false to prevent blocking sign-in
+      return {
+        'scheduledForDeletion': false,
+        'daysRemaining': 0,
       };
     }
   }
@@ -251,7 +197,7 @@ class AuthService {
   // Check if the user needs to be reauthenticated (if their last login was too long ago)
   Future<bool> needsReauthentication() async {
     try {
-      final user = _auth.currentUser;
+      final user = _auth?.currentUser;
       if (user == null) return true;
 
       // Get the user's metadata
@@ -279,7 +225,7 @@ class AuthService {
   Future<void> reauthenticate(String email, String password) async {
     try {
       // Get current user
-      final user = _auth.currentUser;
+      final user = _auth?.currentUser;
       if (user == null) {
         throw Exception('No user is currently signed in');
       }
@@ -363,6 +309,44 @@ class AuthService {
       debugPrint('Error sending account deletion email: $e');
       // We don't throw here because this is a non-critical operation
       // The account will still be deleted even if the email fails
+    }
+  }
+
+  // Request account deletion
+  Future<void> requestAccountDeletion(String uid) async {
+    if (!enableFirebase) {
+      debugPrint('DEV MODE: Simulating account deletion request for $uid');
+      return;
+    }
+
+    try {
+      final now = DateTime.now();
+      final deletionDate = now.add(const Duration(days: 30));
+
+      await _firestore!.collection('deletionRequests').doc(uid).set({
+        'userId': uid,
+        'requestTimestamp': Timestamp.now(),
+        'deletionTimestamp': Timestamp.fromDate(deletionDate),
+      });
+    } catch (e) {
+      debugPrint('Error requesting account deletion: $e');
+      rethrow;
+    }
+  }
+
+  // Cancel account deletion
+  Future<void> cancelAccountDeletion(String uid) async {
+    if (!enableFirebase) {
+      debugPrint(
+          'DEV MODE: Simulating cancellation of account deletion for $uid');
+      return;
+    }
+
+    try {
+      await _firestore!.collection('deletionRequests').doc(uid).delete();
+    } catch (e) {
+      debugPrint('Error cancelling account deletion: $e');
+      rethrow;
     }
   }
 }

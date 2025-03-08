@@ -12,5 +12,7 @@
         <domain includeSubdomains="true">127.0.0.1</domain>
         <domain includeSubdomains="true">192.168.183.123</domain>
         <domain includeSubdomains="true">192.168.3.49</domain>
+        <domain includeSubdomains="true">api-dev.concord.digital</domain>
+        <domain includeSubdomains="true">api.concord.digital</domain>
     </domain-config>
 </network-security-config> 
