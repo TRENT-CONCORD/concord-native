@@ -56,6 +56,9 @@ class _ExploreScreenState extends State<ExploreScreen>
       duration: Duration(milliseconds: 300),
     );
 
+    // Load saved filters
+    _loadSavedFilters();
+
     // Initialize WebSocket channel
     _channel = IOWebSocketChannel.connect('ws://10.0.2.2:3000/explore');
 
@@ -340,6 +343,43 @@ class _ExploreScreenState extends State<ExploreScreen>
     } catch (e) {
       debugPrint('Error loading saved filters: $e');
     }
+  }
+
+  Future<void> _loadSavedFilters() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    setState(() {
+      selectedGenders = (prefs.getStringList('selectedGenders') ?? [])
+          .map((e) => GenderOption.values.firstWhere((g) => g.toString() == e))
+          .toList();
+      ageRange = RangeValues(
+        prefs.getDouble('minAge') ?? 18,
+        prefs.getDouble('maxAge') ?? 40,
+      );
+      maxDistance = prefs.getDouble('maxDistance') ?? 50;
+      // Load other filters similarly...
+    });
+  }
+
+  Future<void> _saveFilters() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    await prefs.setStringList(
+        'selectedGenders', selectedGenders.map((e) => e.toString()).toList());
+    await prefs.setDouble('minAge', ageRange.start);
+    await prefs.setDouble('maxAge', ageRange.end);
+    await prefs.setDouble('maxDistance', maxDistance);
+    // Save other filters similarly...
+  }
+
+  void _resetFilters() {
+    setState(() {
+      selectedGenders = [];
+      ageRange = RangeValues(18, 40);
+      maxDistance = 50;
+      // Reset other filters to default values...
+    });
+    _saveFilters();
   }
 
   @override
