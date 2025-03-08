@@ -24,6 +24,22 @@ class ApiService {
     }
   }
 
+  // Normalize API URL to ensure proper format
+  String normalizeUrl(String url) {
+    // Fix double slashes in the middle of the URL (but preserve protocol)
+    if (url.contains('//')) {
+      url = url.replaceAll('//', '/');
+      url = url.replaceFirst('://', '://'); // Fix protocol
+    }
+
+    // Make sure there's a trailing slash to properly join with endpoints
+    if (!url.endsWith('/')) {
+      url = '$url/';
+    }
+
+    return url;
+  }
+
   // WebSocket URL based on API URL
   String get wsBaseUrl {
     return baseUrl
@@ -358,16 +374,19 @@ class ApiService {
       int maxRetries = 3,
       int timeoutSeconds = 10}) async {
     if (!_isApiAvailable && !endpoint.contains('health')) {
+      debugPrint('API is not available, returning mock or cached data');
       throw Exception('API is not available');
     }
 
-    String url = '$baseUrl/$endpoint';
-    if (url.contains('//')) {
-      url = url.replaceAll('//', '/');
-      url = url.replaceFirst('://', '://'); // Fix protocol
-    }
+    // Normalize endpoint - remove leading slash if present
+    endpoint = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+
+    // Create the full URL and normalize it
+    String url = normalizeUrl('$baseUrl/$endpoint');
 
     int retryCount = 0;
+    SocketException? lastSocketException;
+
     while (retryCount < maxRetries) {
       try {
         final Uri uri = queryParams != null
@@ -401,16 +420,19 @@ class ApiService {
 
           if (response.statusCode == 404) {
             // Don't retry 404 errors
-            _isApiAvailable =
-                endpoint.contains('health') || endpoint.contains('users')
-                    ? false
-                    : _isApiAvailable;
-            throw Exception('Endpoint not found: $url');
+            if (endpoint.contains('health') || endpoint.contains('users')) {
+              _isApiAvailable = false;
+              debugPrint(
+                  'API availability set to false due to 404 on critical endpoint');
+            }
+            throw Exception('Endpoint not found: $url (404)');
           }
 
           retryCount++;
           if (retryCount >= maxRetries) {
-            _isApiAvailable = false;
+            if (!endpoint.contains('health')) {
+              _isApiAvailable = false;
+            }
             throw Exception(
                 'Max retries reached. Status: ${response.statusCode}');
           }
@@ -418,14 +440,22 @@ class ApiService {
               Duration(seconds: 2 * retryCount)); // Exponential backoff
         }
       } on SocketException catch (e) {
+        lastSocketException = e;
         debugPrint('❌ Socket error (network connectivity issue): $e');
-        _isApiAvailable = false;
-        throw Exception('Network connectivity issue: $e');
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          _isApiAvailable = false;
+          throw Exception('Network connectivity issue: $e');
+        }
+        await Future.delayed(
+            Duration(seconds: 2 * retryCount)); // Exponential backoff
       } catch (e) {
         debugPrint('❌ Network error: $e');
         retryCount++;
         if (retryCount >= maxRetries) {
-          _isApiAvailable = false;
+          if (!endpoint.contains('health')) {
+            _isApiAvailable = false;
+          }
           throw Exception('Network error after $maxRetries attempts: $e');
         }
         await Future.delayed(
@@ -433,6 +463,9 @@ class ApiService {
       }
     }
 
+    if (lastSocketException != null) {
+      _isApiAvailable = false;
+    }
     throw Exception('Request failed after $maxRetries attempts');
   }
 
@@ -442,16 +475,19 @@ class ApiService {
       int maxRetries = 3,
       int timeoutSeconds = 10}) async {
     if (!_isApiAvailable && !endpoint.contains('health')) {
+      debugPrint('API is not available, returning mock or cached data');
       throw Exception('API is not available');
     }
 
-    String url = '$baseUrl/$endpoint';
-    if (url.contains('//')) {
-      url = url.replaceAll('//', '/');
-      url = url.replaceFirst('://', '://'); // Fix protocol
-    }
+    // Normalize endpoint - remove leading slash if present
+    endpoint = endpoint.startsWith('/') ? endpoint.substring(1) : endpoint;
+
+    // Create the full URL and normalize it
+    String url = normalizeUrl('$baseUrl/$endpoint');
 
     int retryCount = 0;
+    SocketException? lastSocketException;
+
     while (retryCount < maxRetries) {
       try {
         final Uri uri = Uri.parse(url);
@@ -483,7 +519,7 @@ class ApiService {
 
           if (response.statusCode == 404) {
             // Don't retry 404 errors
-            throw Exception('Endpoint not found: $url');
+            throw Exception('Endpoint not found: $url (404)');
           }
 
           retryCount++;
@@ -495,9 +531,15 @@ class ApiService {
               Duration(seconds: 2 * retryCount)); // Exponential backoff
         }
       } on SocketException catch (e) {
+        lastSocketException = e;
         debugPrint('❌ Socket error (network connectivity issue): $e');
-        _isApiAvailable = false;
-        throw Exception('Network connectivity issue: $e');
+        retryCount++;
+        if (retryCount >= maxRetries) {
+          _isApiAvailable = false;
+          throw Exception('Network connectivity issue: $e');
+        }
+        await Future.delayed(
+            Duration(seconds: 2 * retryCount)); // Exponential backoff
       } catch (e) {
         debugPrint('❌ Network error: $e');
         retryCount++;
@@ -509,6 +551,9 @@ class ApiService {
       }
     }
 
+    if (lastSocketException != null) {
+      _isApiAvailable = false;
+    }
     throw Exception('Request failed after $maxRetries attempts');
   }
 }

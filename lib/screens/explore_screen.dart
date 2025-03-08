@@ -13,6 +13,7 @@ import 'package:flutter_svg/flutter_svg.dart'; // Import flutter_svg for SVG sup
 import 'dart:async'; // Import dart:async for Timer
 import 'dart:math';
 import '../services/api_service.dart'; // Import the API service
+import 'profile_screen.dart';
 
 class ExploreScreen extends StatefulWidget {
   @override
@@ -63,9 +64,18 @@ class _ExploreScreenState extends State<ExploreScreen>
     return _webSocketChannel!;
   }
 
+  bool _isNavigating = false;
+
+  // Add PageController
+  late PageController _pageController;
+  int _selectedIndex = 0;
+
   @override
   void initState() {
     super.initState();
+    // Initialize PageController
+    _pageController = PageController(initialPage: 0);
+
     _flyoutAnimationController = AnimationController(
       vsync: this,
       duration: Duration(milliseconds: 300),
@@ -94,6 +104,7 @@ class _ExploreScreenState extends State<ExploreScreen>
   void dispose() {
     _scrollController.dispose();
     _flyoutAnimationController.dispose();
+    _pageController.dispose(); // Dispose the PageController
 
     // Disconnect from WebSocket
     _apiService.disconnectFromExploreWebSocket();
@@ -481,14 +492,162 @@ class _ExploreScreenState extends State<ExploreScreen>
     return 'user-${DateTime.now().millisecondsSinceEpoch}';
   }
 
+  // Method to handle page changes
+  void _onPageChanged(int index) {
+    setState(() {
+      _selectedIndex = index;
+    });
+  }
+
+  // Method to handle navigation bar item selection
+  void _onDestinationSelected(int index) {
+    _pageController.animateToPage(
+      index,
+      duration: Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: true, // Ensure layout adjusts for keyboard
+      body: PageView(
+        controller: _pageController,
+        onPageChanged: _onPageChanged,
+        physics:
+            NeverScrollableScrollPhysics(), // Disable swiping between pages
+        children: [
+          // Explore Screen (this screen)
+          _buildExploreContent(),
+
+          // Chats Screen
+          Center(
+            child: Text(
+              'Chats',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ),
+
+          // Bubbles Screen
+          Center(
+            child: Text(
+              'Bubbles',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ),
+
+          // Profile Screen
+          ProfileScreen(uid: 'currentUserId'),
+        ],
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color(0xFF4A148C),
+              Color(0xFF7B1FA2),
+              Color(0xFFAB47BC),
+            ],
+            stops: [0.0, 0.5, 1.0],
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Color(0xFFCC0AE6),
+              offset: Offset(-4, -4),
+              blurRadius: 12,
+              spreadRadius: 2,
+            ),
+            BoxShadow(
+              color: Color(0xFFCC0AE6),
+              offset: Offset(4, 4),
+              blurRadius: 12,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+        child: NavigationBar(
+          height: 70,
+          backgroundColor: Colors.transparent,
+          indicatorColor: Colors.transparent,
+          selectedIndex: _selectedIndex,
+          onDestinationSelected: _onDestinationSelected,
+          destinations: [
+            NavigationDestination(
+              icon: SvgPicture.asset(
+                'assets/LowerNavBarIcons/explore.svg',
+                width: 70,
+                height: 70,
+                placeholderBuilder: (context) => Icon(
+                  Icons.explore,
+                  size: 70,
+                  color: Colors.white,
+                ),
+              ),
+              label: '',
+            ),
+            NavigationDestination(
+              icon: SvgPicture.asset(
+                'assets/LowerNavBarIcons/chats.svg',
+                width: 70,
+                height: 70,
+                placeholderBuilder: (context) => Icon(
+                  Icons.chat,
+                  size: 70,
+                  color: Colors.white,
+                ),
+              ),
+              label: '',
+            ),
+            NavigationDestination(
+              icon: SvgPicture.asset(
+                'assets/LowerNavBarIcons/bubbles.svg',
+                width: 70,
+                height: 70,
+                placeholderBuilder: (context) => Icon(
+                  Icons.bubble_chart,
+                  size: 70,
+                  color: Colors.white,
+                ),
+              ),
+              label: '',
+            ),
+            NavigationDestination(
+              icon: SvgPicture.asset(
+                'assets/LowerNavBarIcons/usersettings.svg',
+                width: 70,
+                height: 70,
+                placeholderBuilder: (context) => Icon(
+                  Icons.settings,
+                  size: 70,
+                  color: Colors.white,
+                ),
+              ),
+              label: '',
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Method to build the explore content
+  Widget _buildExploreContent() {
+    return Scaffold(
+      resizeToAvoidBottomInset: true, // Ensure layout adjusts for keyboard
       appBar: AppBar(
         title: Text('Explore'),
-        backgroundColor:
-            Color(0xFF1A0033), // Match the darkest background color
+        backgroundColor: Color(0xFF1A0033),
         actions: [
           IconButton(
             icon: Icon(Icons.filter_list),
@@ -935,15 +1094,13 @@ class _ExploreScreenState extends State<ExploreScreen>
                                 bottom: 16,
                                 right: 16,
                                 child: FloatingActionButton(
-                                  backgroundColor: Color(
-                                      0xFF6A0DAD), // Brighter purple button
+                                  backgroundColor: Color(0xFF6A0DAD),
                                   onPressed: () async {
                                     if (Navigator.of(context).canPop()) {
-                                      Navigator.of(context)
-                                          .pop(); // Minimise the flyout
+                                      Navigator.of(context).pop();
                                     }
-                                    await _saveFilter(); // Save the filter
-                                    _loadUsers(); // Refresh the user list after the flyout is closed
+                                    await _saveFilter();
+                                    _loadUsers();
                                   },
                                   child: Icon(
                                     Icons.save,
@@ -992,8 +1149,7 @@ class _ExploreScreenState extends State<ExploreScreen>
               if (!_isApiAvailable)
                 Container(
                   padding: EdgeInsets.symmetric(vertical: 6, horizontal: 12),
-                  color: Colors.deepOrange.withOpacity(
-                      0.7), // Darker orange that stands out on dark background
+                  color: Colors.deepOrange.withOpacity(0.7),
                   child: Row(
                     children: [
                       Icon(Icons.warning_amber_rounded,
@@ -1068,8 +1224,7 @@ class _ExploreScreenState extends State<ExploreScreen>
                               icon: Icon(Icons.refresh),
                               label: Text('Reset Filters'),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Color(
-                                    0xFF6A0DAD), // Brighter purple for better visibility
+                                backgroundColor: Color(0xFF6A0DAD),
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(20),

@@ -310,8 +310,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               ]
                             : null,
                       ),
-                      child: SvgPicture.network(
-                        'https://4355d96bf828a20e921a948d2658b597.cdn.bubble.io/f1739794296650x110416392599961730/Browse%20Profiles%20Navbar.svg',
+                      child: SvgPicture.asset(
+                        'assets/LowerNavBarIcons/explore.svg',
                         width: 70,
                         height: 70,
                       ),
@@ -377,8 +377,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               ]
                             : null,
                       ),
-                      child: SvgPicture.network(
-                        'https://4355d96bf828a20e921a948d2658b597.cdn.bubble.io/f1739795563045x288695892351106700/User%20Chats.svg',
+                      child: SvgPicture.asset(
+                        'assets/LowerNavBarIcons/chats.svg',
                         width: 70,
                         height: 70,
                       ),
@@ -444,8 +444,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               ]
                             : null,
                       ),
-                      child: SvgPicture.network(
-                        'https://4355d96bf828a20e921a948d2658b597.cdn.bubble.io/f1739795834138x552831874957548740/Bubbles%20Navbar.svg',
+                      child: SvgPicture.asset(
+                        'assets/LowerNavBarIcons/bubbles.svg',
                         width: 70,
                         height: 70,
                       ),
@@ -511,8 +511,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               ]
                             : null,
                       ),
-                      child: SvgPicture.network(
-                        'https://4355d96bf828a20e921a948d2658b597.cdn.bubble.io/f1739796011658x473342461644521400/User%20Settings%20Navbar.svg',
+                      child: SvgPicture.asset(
+                        'assets/LowerNavBarIcons/usersettings.svg',
                         width: 70,
                         height: 70,
                       ),
