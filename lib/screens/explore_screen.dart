@@ -9,6 +9,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter/gestures.dart';
 import 'package:geolocator/geolocator.dart'; // Import geolocator package
 import 'package:shared_preferences/shared_preferences.dart'; // Import shared_preferences for local storage
+import 'package:flutter_svg/flutter_svg.dart'; // Import flutter_svg for SVG support
 
 class ExploreScreen extends StatefulWidget {
   @override
@@ -48,6 +49,15 @@ class _ExploreScreenState extends State<ExploreScreen>
   // WebSocket channel for real-time updates
   late WebSocketChannel _channel;
 
+  String get _baseUrl {
+    const branch = String.fromEnvironment('BRANCH', defaultValue: 'sandbox');
+    if (branch == 'main') {
+      return 'https://api.concord.digital';
+    } else {
+      return 'https://api-dev.concord.digital';
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -57,20 +67,10 @@ class _ExploreScreenState extends State<ExploreScreen>
     );
 
     // Load saved filters
-    _loadSavedFilters();
+    _loadSavedFilter();
 
-    // Initialize WebSocket channel
-    _channel = IOWebSocketChannel.connect('ws://10.0.2.2:3000/explore');
-
-    // Listen for WebSocket messages
-    _channel.stream.listen((message) {
-      final data = json.decode(message);
-      if (data['event'] == 'userUpdated') {
-        _handleUserUpdated(data['user']);
-      } else if (data['event'] == 'newUser') {
-        _handleNewUser(data['user']);
-      }
-    });
+    // Initialize WebSocket connection
+    _initializeWebSocket();
 
     // Get user's current location
     _getUserLocation();
@@ -90,9 +90,16 @@ class _ExploreScreenState extends State<ExploreScreen>
     super.dispose();
   }
 
-  // Handle user updates from WebSocket
+  // Add a mounted check before calling setState
+  void _safeSetState(VoidCallback fn) {
+    if (mounted) {
+      setState(fn);
+    }
+  }
+
+  // Update WebSocket handlers to use _safeSetState
   void _handleUserUpdated(Map<String, dynamic> updatedUser) {
-    setState(() {
+    _safeSetState(() {
       final index =
           _users.indexWhere((user) => user['id'] == updatedUser['id']);
       if (index != -1) {
@@ -101,9 +108,8 @@ class _ExploreScreenState extends State<ExploreScreen>
     });
   }
 
-  // Handle new users from WebSocket
   void _handleNewUser(Map<String, dynamic> newUser) {
-    setState(() {
+    _safeSetState(() {
       _users.insert(0, newUser);
     });
   }
@@ -173,9 +179,11 @@ class _ExploreScreenState extends State<ExploreScreen>
     }
   }
 
-  // Navigate to user profile detail
+  // Prevent multiple navigation actions
   void _navigateToUserProfile(Map<String, dynamic> user) {
-    // TODO: Implement actual navigation to profile detail page
+    if (Navigator.canPop(context)) {
+      Navigator.pop(context);
+    }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text('Viewing ${user['name']}\'s profile'),
@@ -190,14 +198,6 @@ class _ExploreScreenState extends State<ExploreScreen>
         ),
       ),
     );
-
-    // For future implementation:
-    // Navigator.push(
-    //   context,
-    //   MaterialPageRoute(
-    //     builder: (context) => UserProfileDetailScreen(userId: user['id']),
-    //   ),
-    // );
   }
 
   Future<void> _getUserLocation() async {
@@ -235,6 +235,7 @@ class _ExploreScreenState extends State<ExploreScreen>
       final prefs = await SharedPreferences.getInstance();
       final filterData = {
         'selectedGenders': selectedGenders.map((g) => g.name).toList(),
+        'selectedSecondaryGenders': selectedSecondaryGenders,
         'ageRange': [ageRange.start.toInt(), ageRange.end.toInt()],
         'selectedEducationLevels':
             selectedEducationLevels.map((e) => e.name).toList(),
@@ -255,14 +256,18 @@ class _ExploreScreenState extends State<ExploreScreen>
       await prefs.setString('savedFilter', json.encode(filterData));
 
       // Save filters to backend
-      final response = await http.post(
-        Uri.parse('http://10.0.2.2:3000/explore/filters'),
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({
-          'userId': 'currentUserId', // Replace with actual user ID
-          'filters': filterData,
-        }),
-      );
+      final userId =
+          await _getCurrentUserId(); // Replace with actual user ID retrieval logic
+      final response = await http
+          .post(
+            Uri.parse('$_baseUrl/explore/filters'),
+            headers: {'Content-Type': 'application/json'},
+            body: json.encode({
+              'userId': userId,
+              'filters': filterData,
+            }),
+          )
+          .timeout(Duration(seconds: 10)); // Add timeout
 
       if (response.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -278,7 +283,7 @@ class _ExploreScreenState extends State<ExploreScreen>
       debugPrint('Error saving filters: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to save filters.'),
+          content: Text('Failed to save filters. Please try again.'),
           backgroundColor: Colors.red,
         ),
       );
@@ -445,21 +450,6 @@ class _ExploreScreenState extends State<ExploreScreen>
                                         CrossAxisAlignment.start,
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      ElevatedButton(
-                                        onPressed: _saveFilter,
-                                        child: Text('Save Filter'),
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: Color(0xFF6A0DAD),
-                                          foregroundColor: Colors.white,
-                                          shape: RoundedRectangleBorder(
-                                            borderRadius:
-                                                BorderRadius.circular(20),
-                                          ),
-                                          padding: EdgeInsets.symmetric(
-                                              horizontal: 16, vertical: 12),
-                                          elevation: 4,
-                                        ),
-                                      ),
                                       Text(
                                         'Distance (km)',
                                         style: TextStyle(
@@ -498,24 +488,40 @@ class _ExploreScreenState extends State<ExploreScreen>
                                         selectedItems: selectedGenders
                                             .map((gender) => gender.display)
                                             .toList(),
-                                        onSelectionChanged:
-                                            (selectedPrimaryGenders) {
+                                        onSelectionChanged: (selected) {
                                           setState(() {
-                                            // Map the selected strings back to GenderOption values
-                                            selectedGenders =
-                                                selectedPrimaryGenders
-                                                    .map((selected) {
-                                              return GenderOption.values
-                                                  .firstWhere(
-                                                (gender) =>
-                                                    gender.display == selected,
-                                                orElse: () => GenderOption
-                                                    .man, // Default value if not found
-                                              );
-                                            }).toList();
+                                            selectedGenders = selected
+                                                .map((s) => GenderOption.values
+                                                    .firstWhere(
+                                                        (g) => g.display == s))
+                                                .toList();
                                           });
                                         },
                                       ),
+                                      if (selectedGenders.isNotEmpty) ...[
+                                        SizedBox(height: 16),
+                                        Text(
+                                          'Secondary Genders',
+                                          style: TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.white,
+                                            fontFamily: 'FuturisticFont',
+                                          ),
+                                        ),
+                                        SizedBox(height: 8),
+                                        MultiSelectChip(
+                                          items: _getSecondaryGenderOptions(),
+                                          selectedItems:
+                                              selectedSecondaryGenders,
+                                          onSelectionChanged: (selected) {
+                                            setState(() {
+                                              selectedSecondaryGenders =
+                                                  selected;
+                                            });
+                                          },
+                                        ),
+                                      ],
                                       SizedBox(height: 16),
                                       Text(
                                         'Age Range',
@@ -527,90 +533,18 @@ class _ExploreScreenState extends State<ExploreScreen>
                                         ),
                                       ),
                                       SizedBox(height: 8),
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: TextField(
-                                              decoration: InputDecoration(
-                                                labelText: 'From',
-                                                labelStyle: TextStyle(
-                                                    color: Colors.white),
-                                                border: OutlineInputBorder(
-                                                  borderSide: BorderSide(
-                                                      color: Color(0xFFCC0AE6)),
-                                                ),
-                                              ),
-                                              keyboardType:
-                                                  TextInputType.number,
-                                              onChanged: (value) {
-                                                if (value.isNotEmpty) {
-                                                  int? minAge =
-                                                      int.tryParse(value);
-                                                  if (minAge != null &&
-                                                      minAge >= 18 &&
-                                                      minAge <= 100) {
-                                                    setState(() {
-                                                      ageRange = RangeValues(
-                                                          minAge.toDouble(),
-                                                          ageRange.end);
-                                                    });
-                                                  }
-                                                }
-                                              },
-                                            ),
-                                          ),
-                                          SizedBox(width: 16),
-                                          Expanded(
-                                            child: TextField(
-                                              decoration: InputDecoration(
-                                                labelText: 'To',
-                                                labelStyle: TextStyle(
-                                                    color: Colors.white),
-                                                border: OutlineInputBorder(
-                                                  borderSide: BorderSide(
-                                                      color: Color(0xFFCC0AE6)),
-                                                ),
-                                              ),
-                                              keyboardType:
-                                                  TextInputType.number,
-                                              onChanged: (value) {
-                                                if (value.isNotEmpty) {
-                                                  int? maxAge =
-                                                      int.tryParse(value);
-                                                  if (maxAge != null &&
-                                                      maxAge >= 18 &&
-                                                      maxAge <= 100) {
-                                                    setState(() {
-                                                      ageRange = RangeValues(
-                                                          ageRange.start,
-                                                          maxAge.toDouble());
-                                                    });
-                                                  }
-                                                }
-                                              },
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      SizedBox(height: 16),
-                                      Text(
-                                        'Secondary Gender Options',
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.white,
-                                          fontFamily: 'FuturisticFont',
+                                      RangeSlider(
+                                        values: ageRange,
+                                        min: 18,
+                                        max: 100,
+                                        divisions: 82,
+                                        labels: RangeLabels(
+                                          ageRange.start.round().toString(),
+                                          ageRange.end.round().toString(),
                                         ),
-                                      ),
-                                      SizedBox(height: 8),
-                                      MultiSelectChip(
-                                        items: _getSecondaryGenderOptions(),
-                                        selectedItems: selectedSecondaryGenders,
-                                        onSelectionChanged:
-                                            (selectedSecondaryGenders) {
+                                        onChanged: (RangeValues values) {
                                           setState(() {
-                                            this.selectedSecondaryGenders =
-                                                selectedSecondaryGenders;
+                                            ageRange = values;
                                           });
                                         },
                                       ),
@@ -909,13 +843,13 @@ class _ExploreScreenState extends State<ExploreScreen>
                                 child: FloatingActionButton(
                                   backgroundColor: Color(
                                       0xFF6A0DAD), // Brighter purple button
-                                  onPressed: () {
-                                    Navigator.pop(context);
-                                    // Trigger a refresh of the user list with the new filters
-                                    setState(() {
-                                      // Force rebuild and reload users with new filters
-                                      _loadUsers();
-                                    });
+                                  onPressed: () async {
+                                    if (Navigator.of(context).canPop()) {
+                                      Navigator.of(context)
+                                          .pop(); // Minimise the flyout
+                                    }
+                                    await _saveFilter(); // Save the filter
+                                    _loadUsers(); // Refresh the user list after the flyout is closed
                                   },
                                   child: Icon(
                                     Icons.save,
@@ -1144,47 +1078,8 @@ class _ExploreScreenState extends State<ExploreScreen>
                                                   user['photoUrl']
                                                       .toString()
                                                       .isNotEmpty
-                                              ? Image.network(
-                                                  user['photoUrl'].toString(),
-                                                  fit: BoxFit.cover,
-                                                  loadingBuilder: (context,
-                                                      child, loadingProgress) {
-                                                    if (loadingProgress == null)
-                                                      return child;
-                                                    return Container(
-                                                      color: Color(0xFF1A0033),
-                                                      child: Center(
-                                                        child:
-                                                            CircularProgressIndicator(
-                                                          value: loadingProgress
-                                                                      .expectedTotalBytes !=
-                                                                  null
-                                                              ? loadingProgress
-                                                                      .cumulativeBytesLoaded /
-                                                                  loadingProgress
-                                                                      .expectedTotalBytes!
-                                                              : null,
-                                                          valueColor:
-                                                              AlwaysStoppedAnimation<
-                                                                      Color>(
-                                                                  Color(
-                                                                      0xFFCC0AE6)),
-                                                        ),
-                                                      ),
-                                                    );
-                                                  },
-                                                  errorBuilder: (context, error,
-                                                      stackTrace) {
-                                                    return Container(
-                                                      color: Color(0xFF1A0033),
-                                                      child: Icon(
-                                                        Icons.person,
-                                                        size: 80,
-                                                        color: Colors.white70,
-                                                      ),
-                                                    );
-                                                  },
-                                                )
+                                              ? _buildSvgImage(
+                                                  user['photoUrl'].toString())
                                               : Container(
                                                   color: Color(0xFF1A0033),
                                                   child: Icon(
@@ -1281,7 +1176,7 @@ class _ExploreScreenState extends State<ExploreScreen>
                                                             ),
                                                           ),
                                                         ))
-                                                    ?.toList() ??
+                                                    .toList() ??
                                                 [],
                                           ),
                                         ],
@@ -1304,75 +1199,83 @@ class _ExploreScreenState extends State<ExploreScreen>
 
   Future<List<Map<String, dynamic>>> _fetchUsers(
       [int offset = 0, int limit = 20]) async {
-    try {
-      // Build query parameters based on selected filters
-      Map<String, dynamic> queryParams = _buildQueryParams();
+    int retryCount = 0;
+    const maxRetries = 3;
 
-      // Add pagination parameters
-      queryParams['limit'] = limit;
-      queryParams['offset'] = offset;
+    while (retryCount < maxRetries) {
+      try {
+        // Build query parameters based on selected filters
+        Map<String, dynamic> queryParams = _buildQueryParams();
 
-      // For Android emulator, use 10.0.2.2 to access host machine
-      // For iOS simulator, use localhost
-      // For physical devices, use your computer's IP address
-      final String baseUrl = 'http://10.0.2.2:3000/api';
+        // Add pagination parameters
+        queryParams['limit'] = limit;
+        queryParams['offset'] = offset;
 
-      // Convert queryParams to URL query string
-      final Uri uri = Uri.parse('$baseUrl/explore').replace(
-        queryParameters:
-            queryParams.map((key, value) => MapEntry(key, value.toString())),
-      );
+        // Use the dynamic base URL
+        final Uri uri = Uri.parse('$_baseUrl/explore').replace(
+          queryParameters:
+              queryParams.map((key, value) => MapEntry(key, value.toString())),
+        );
 
-      debugPrint('Fetching users with URI: $uri');
+        debugPrint('Fetching users with URI: $uri');
 
-      final response = await http.get(
-        uri,
-        headers: {
-          'Content-Type': 'application/json',
-          // Add authorization token if you have it
-          // 'Authorization': 'Bearer $token',
-        },
-      ).timeout(Duration(seconds: 10)); // Add timeout to prevent long waiting
+        final response = await http.get(
+          uri,
+          headers: {
+            'Content-Type': 'application/json',
+            // Add authorization token if you have it
+            // 'Authorization': 'Bearer $token',
+          },
+        ).timeout(Duration(seconds: 10)); // Add timeout to prevent long waiting
 
-      if (response.statusCode == 200) {
-        try {
-          final List<dynamic> data = json.decode(response.body);
-          return data
-              .map<Map<String, dynamic>>((user) => {
-                    'id': user['id'].toString(),
-                    'name': user['displayName'].toString(),
-                    'age': user['age'].toString(),
-                    'distance': user['distance'].toString(),
-                    'photoUrl': user['photoUrl']?.toString() ?? '',
-                    'genders': user['genders'] != null
-                        ? List<String>.from(user['genders'])
-                        : <String>[],
-                    // Add other user properties you want to display
-                  })
-              .toList();
-        } catch (e) {
-          debugPrint('Error parsing JSON: $e');
+        if (response.statusCode == 200) {
+          try {
+            final List<dynamic> data = json.decode(response.body);
+            return data
+                .map<Map<String, dynamic>>((user) => {
+                      'id': user['id'].toString(),
+                      'name': user['displayName'].toString(),
+                      'age': user['age'].toString(),
+                      'distance': user['distance'].toString(),
+                      'photoUrl': user['photoUrl']?.toString() ?? '',
+                      'genders': user['genders'] != null
+                          ? List<String>.from(user['genders'])
+                          : <String>[],
+                      // Add other user properties you want to display
+                    })
+                .toList();
+          } catch (e) {
+            debugPrint('Error parsing JSON: $e');
+            debugPrint('Response body: ${response.body}');
+            setState(() {
+              _isApiAvailable = false;
+            });
+            return _getMockUsers(offset, limit);
+          }
+        } else {
+          debugPrint(
+              'Error: Unexpected response status: ${response.statusCode}');
           debugPrint('Response body: ${response.body}');
           setState(() {
             _isApiAvailable = false;
           });
           return _getMockUsers(offset, limit);
         }
-      } else {
-        debugPrint('Error: Unexpected response status: ${response.statusCode}');
-        debugPrint('Response body: ${response.body}');
-        setState(() {
-          _isApiAvailable = false;
-        });
-        return _getMockUsers(offset, limit);
+      } catch (e) {
+        retryCount++;
+        debugPrint('Error fetching users (attempt $retryCount): $e');
+        if (retryCount >= maxRetries) {
+          setState(() {
+            _isApiAvailable = false;
+          });
+          return _getMockUsers(offset, limit);
+        }
+        await Future.delayed(Duration(seconds: 2)); // Wait before retrying
       }
-    } catch (e) {
-      debugPrint('Error fetching users: $e');
-      setState(() {
-        _isApiAvailable = false;
-      });
-      return _getMockUsers(offset, limit);
     }
+
+    // Fallback in case of unexpected failure
+    return _getMockUsers(offset, limit);
   }
 
   // Mock data for when the backend is not available
@@ -1563,6 +1466,115 @@ class _ExploreScreenState extends State<ExploreScreen>
       options.addAll(GenderSubOptionBeyondBinary.values.map((e) => e.display));
     }
     return options;
+  }
+
+  List<String> _getSecondaryGenderOptionsForPrimary(GenderOption primary) {
+    List<String> options = [];
+    if (primary == GenderOption.man) {
+      options.addAll(GenderSubOptionMan.values.map((e) => e.display));
+    } else if (primary == GenderOption.woman) {
+      options.addAll(GenderSubOptionWoman.values.map((e) => e.display));
+    } else if (primary == GenderOption.beyondBinary) {
+      options.addAll(GenderSubOptionBeyondBinary.values.map((e) => e.display));
+    }
+    return options;
+  }
+
+  void _initializeWebSocket() {
+    try {
+      // Validate and correct the WebSocket URL
+      String webSocketUrl = _baseUrl
+          .replaceFirst('https://', 'wss://')
+          .replaceFirst('http://', 'ws://')
+          .replaceAll('/api', ''); // Remove '/api' if present
+
+      if (!webSocketUrl.endsWith('/explore')) {
+        webSocketUrl = '$webSocketUrl/explore';
+      }
+
+      debugPrint('Connecting to WebSocket URL: $webSocketUrl');
+
+      _channel = IOWebSocketChannel.connect(webSocketUrl);
+
+      // Listen for WebSocket messages
+      _channel.stream.listen(
+        (message) {
+          final data = json.decode(message);
+          if (data['event'] == 'userUpdated') {
+            _handleUserUpdated(data['user']);
+          } else if (data['event'] == 'newUser') {
+            _handleNewUser(data['user']);
+          }
+        },
+        onError: (error) {
+          debugPrint('WebSocket error: $error');
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _showWebSocketError();
+          });
+          _retryWebSocketConnection();
+        },
+        onDone: () {
+          debugPrint('WebSocket connection closed. Retrying...');
+          _retryWebSocketConnection();
+        },
+      );
+    } catch (e) {
+      debugPrint('Error initializing WebSocket: $e');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showWebSocketError();
+      });
+      _retryWebSocketConnection();
+    }
+  }
+
+  void _retryWebSocketConnection() {
+    Future.delayed(Duration(seconds: 5), () {
+      if (mounted) {
+        debugPrint('Retrying WebSocket connection...');
+        _initializeWebSocket();
+      }
+    });
+  }
+
+  void _showWebSocketError() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Failed to connect to real-time updates. Retrying...'),
+        backgroundColor: Colors.red,
+      ),
+    );
+  }
+
+  Future<String> _getCurrentUserId() async {
+    // Placeholder implementation for user ID retrieval
+    // Replace this with actual logic to fetch the current user ID
+    return 'placeholderUserId';
+  }
+
+  Widget _buildSvgImage(String svgPath) {
+    try {
+      return SvgPicture.asset(
+        svgPath,
+        placeholderBuilder: (BuildContext context) => Container(
+          color: Colors.grey[900],
+          child: Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFCC0AE6)),
+            ),
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error loading SVG: $e');
+      return Container(
+        color: Colors.grey[900],
+        child: Icon(
+          Icons.broken_image,
+          color: Colors.white70,
+          size: 80,
+        ),
+      );
+    }
   }
 }
 
