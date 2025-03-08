@@ -1,4 +1,4 @@
-import { IsOptional, IsEnum, IsArray, IsInt, Min, Max, ArrayMinSize, ArrayMaxSize } from 'class-validator';
+import { IsOptional, IsEnum, IsArray, IsInt, Min, Max, ArrayMinSize, ArrayMaxSize, IsNumber } from 'class-validator';
 import { Type } from 'class-transformer';
 import { GenderOption, EducationLevel, CommunicationStyle, Interest, SmokingHabit, DrinkingHabit, WorkoutHabit, DietaryPreference, SleepingHabit, LoveLanguage } from '../../models/user.entity';
 
@@ -82,4 +82,21 @@ export class ExploreFilterDto {
   @IsInt()
   @Min(0)
   offset?: number = 0;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  latitude?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  longitude?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(1000)
+  maxDistance?: number;
 } 

@@ -304,20 +304,7 @@ class HomePage extends StatelessWidget {
     final authService = AuthService();
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Concord'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () async {
-              await authService.signOut();
-              if (context.mounted) {
-                Navigator.pushReplacementNamed(context, '/');
-              }
-            },
-          ),
-        ],
-      ),
+      appBar: null,
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,

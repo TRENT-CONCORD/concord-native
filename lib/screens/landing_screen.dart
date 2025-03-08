@@ -57,15 +57,7 @@ class _LandingScreenState extends State<LandingScreen> {
                       children: [
                         const SizedBox(height: 12),
                         // Logo and Title
-                        Text(
-                          'Concord™',
-                          style: GoogleFonts.orbitron(
-                            fontSize: 38,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
+                        // Removed Concord header and title
                         const SizedBox(height: 2),
                         // Tagline
                         const Text(

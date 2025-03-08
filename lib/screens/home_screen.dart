@@ -215,17 +215,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return WillPopScope(
       onWillPop: _onWillPop,
       child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Concord'),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.notifications),
-              onPressed: () {
-                // TODO: Implement notifications
-              },
-            ),
-          ],
-        ),
+        appBar: null,
         body: screens[_currentIndex],
         bottomNavigationBar: Container(
           decoration: BoxDecoration(

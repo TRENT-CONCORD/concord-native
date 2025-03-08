@@ -3,12 +3,16 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../models/user.entity';
 import { ExploreFilterDto } from './dto/explore-filter.dto';
+import { SavedFilter } from './models/saved-filter.entity';
 
 @Injectable()
 export class ExploreService {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+
+    @InjectRepository(SavedFilter)
+    private savedFiltersRepository: Repository<SavedFilter>,
   ) {}
 
   async getUsers(filterDto: ExploreFilterDto): Promise<any[]> {
@@ -25,6 +29,8 @@ export class ExploreService {
         gender: 'man',
         age: 28,
         distance: '5 km',
+        latitude: 40.7128,
+        longitude: -74.0060,
         interests: ['hiking', 'photography', 'cooking'],
         bio: 'I love hiking and taking photos of nature. Also enjoy cooking in my free time.',
         educationLevels: ['bachelors'],
@@ -44,6 +50,8 @@ export class ExploreService {
         gender: 'woman',
         age: 25,
         distance: '3 km',
+        latitude: 34.0522,
+        longitude: -118.2437,
         interests: ['reading', 'yoga', 'traveling'],
         bio: 'Yoga instructor who loves to read and travel whenever possible.',
         educationLevels: ['masters'],
@@ -131,10 +139,58 @@ export class ExploreService {
       filteredUsers = filteredUsers.filter(user => user.age <= filterDto.maxAge);
     }
 
+    // Proximity-based filtering
+    if (filterDto.latitude && filterDto.longitude && filterDto.maxDistance) {
+      const { latitude, longitude, maxDistance } = filterDto;
+
+      filteredUsers = filteredUsers.filter(user => {
+        if (!user.latitude || !user.longitude) return false;
+
+        const distance = this.calculateDistance(
+          latitude,
+          longitude,
+          user.latitude,
+          user.longitude,
+        );
+
+        return distance <= maxDistance;
+      });
+    }
+
     // Apply pagination
     const limit = filterDto.limit || 20;
     const offset = filterDto.offset || 0;
     
     return filteredUsers.slice(offset, offset + limit);
+  }
+
+  private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const earthRadius = 6371; // Earth's radius in kilometers
+
+    const dLat = this.degreesToRadians(lat2 - lat1);
+    const dLon = this.degreesToRadians(lon2 - lon1);
+
+    const a =
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(this.degreesToRadians(lat1)) *
+        Math.cos(this.degreesToRadians(lat2)) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadius * c;
+  }
+
+  private degreesToRadians(degrees: number): number {
+    return degrees * (Math.PI / 180);
+  }
+
+  async saveFilter(userId: string, filters: Record<string, any>): Promise<SavedFilter> {
+    const savedFilter = this.savedFiltersRepository.create({ userId, filters });
+    return this.savedFiltersRepository.save(savedFilter);
+  }
+
+  async getSavedFilters(userId: string): Promise<SavedFilter[]> {
+    return this.savedFiltersRepository.find({ where: { userId } });
   }
 } 

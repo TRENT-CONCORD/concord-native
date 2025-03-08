@@ -1,10 +1,14 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/io.dart'; // Import WebSocket channel
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/user_profile.dart';
 import '../models/profile_enums.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter/gestures.dart';
+import 'package:geolocator/geolocator.dart'; // Import geolocator package
+import 'package:shared_preferences/shared_preferences.dart'; // Import shared_preferences for local storage
 
 class ExploreScreen extends StatefulWidget {
   @override
@@ -27,6 +31,9 @@ class _ExploreScreenState extends State<ExploreScreen>
   DietaryPreference? selectedDietaryPreference;
   SleepingHabit? selectedSleepingHabit;
   String? selectedLocation;
+  double maxDistance = 50; // Default max distance in kilometers
+  double? userLatitude;
+  double? userLongitude;
   late AnimationController _flyoutAnimationController;
 
   // Pagination and loading state
@@ -38,6 +45,9 @@ class _ExploreScreenState extends State<ExploreScreen>
   final ScrollController _scrollController = ScrollController();
   bool _isApiAvailable = true; // Track if API is available
 
+  // WebSocket channel for real-time updates
+  late WebSocketChannel _channel;
+
   @override
   void initState() {
     super.initState();
@@ -45,6 +55,22 @@ class _ExploreScreenState extends State<ExploreScreen>
       vsync: this,
       duration: Duration(milliseconds: 300),
     );
+
+    // Initialize WebSocket channel
+    _channel = IOWebSocketChannel.connect('ws://10.0.2.2:3000/explore');
+
+    // Listen for WebSocket messages
+    _channel.stream.listen((message) {
+      final data = json.decode(message);
+      if (data['event'] == 'userUpdated') {
+        _handleUserUpdated(data['user']);
+      } else if (data['event'] == 'newUser') {
+        _handleNewUser(data['user']);
+      }
+    });
+
+    // Get user's current location
+    _getUserLocation();
 
     // Load initial users
     _loadUsers();
@@ -57,7 +83,26 @@ class _ExploreScreenState extends State<ExploreScreen>
   void dispose() {
     _scrollController.dispose();
     _flyoutAnimationController.dispose();
+    _channel.sink.close(); // Close WebSocket connection
     super.dispose();
+  }
+
+  // Handle user updates from WebSocket
+  void _handleUserUpdated(Map<String, dynamic> updatedUser) {
+    setState(() {
+      final index =
+          _users.indexWhere((user) => user['id'] == updatedUser['id']);
+      if (index != -1) {
+        _users[index] = updatedUser;
+      }
+    });
+  }
+
+  // Handle new users from WebSocket
+  void _handleNewUser(Map<String, dynamic> newUser) {
+    setState(() {
+      _users.insert(0, newUser);
+    });
   }
 
   // Scroll listener for pagination
@@ -152,13 +197,159 @@ class _ExploreScreenState extends State<ExploreScreen>
     // );
   }
 
+  Future<void> _getUserLocation() async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        throw Exception('Location services are disabled.');
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          throw Exception('Location permissions are denied.');
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        throw Exception('Location permissions are permanently denied.');
+      }
+
+      Position position = await Geolocator.getCurrentPosition(
+          desiredAccuracy: LocationAccuracy.high);
+      setState(() {
+        userLatitude = position.latitude;
+        userLongitude = position.longitude;
+      });
+    } catch (e) {
+      debugPrint('Error getting location: $e');
+    }
+  }
+
+  Future<void> _saveFilter() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final filterData = {
+        'selectedGenders': selectedGenders.map((g) => g.name).toList(),
+        'ageRange': [ageRange.start.toInt(), ageRange.end.toInt()],
+        'selectedEducationLevels':
+            selectedEducationLevels.map((e) => e.name).toList(),
+        'selectedCommunicationStyles':
+            selectedCommunicationStyles.map((s) => s.name).toList(),
+        'selectedLoveLanguages':
+            selectedLoveLanguages.map((l) => l.name).toList(),
+        'selectedInterests': selectedInterests.map((i) => i.name).toList(),
+        'selectedSmokingHabit': selectedSmokingHabit?.name,
+        'selectedDrinkingHabit': selectedDrinkingHabit?.name,
+        'selectedWorkoutHabit': selectedWorkoutHabit?.name,
+        'selectedDietaryPreference': selectedDietaryPreference?.name,
+        'selectedSleepingHabit': selectedSleepingHabit?.name,
+        'maxDistance': maxDistance,
+      };
+
+      // Save filters locally
+      await prefs.setString('savedFilter', json.encode(filterData));
+
+      // Save filters to backend
+      final response = await http.post(
+        Uri.parse('http://10.0.2.2:3000/explore/filters'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'userId': 'currentUserId', // Replace with actual user ID
+          'filters': filterData,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Filters saved successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      } else {
+        throw Exception('Failed to save filters to backend.');
+      }
+    } catch (e) {
+      debugPrint('Error saving filters: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to save filters.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Future<void> _loadSavedFilter() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedFilter = prefs.getString('savedFilter');
+
+      if (savedFilter != null) {
+        final filterData = json.decode(savedFilter);
+        setState(() {
+          selectedGenders = (filterData['selectedGenders'] as List)
+              .map((g) => GenderOption.values.firstWhere((e) => e.name == g))
+              .toList();
+          ageRange = RangeValues(
+            (filterData['ageRange'][0] as int).toDouble(),
+            (filterData['ageRange'][1] as int).toDouble(),
+          );
+          selectedEducationLevels = (filterData['selectedEducationLevels']
+                  as List)
+              .map(
+                  (e) => EducationLevel.values.firstWhere((el) => el.name == e))
+              .toList();
+          selectedCommunicationStyles =
+              (filterData['selectedCommunicationStyles'] as List)
+                  .map((s) => CommunicationStyle.values
+                      .firstWhere((cs) => cs.name == s))
+                  .toList();
+          selectedLoveLanguages = (filterData['selectedLoveLanguages'] as List)
+              .map((l) => LoveLanguage.values.firstWhere((ll) => ll.name == l))
+              .toList();
+          selectedInterests = (filterData['selectedInterests'] as List)
+              .map((i) => Interest.values.firstWhere((iv) => iv.name == i))
+              .toList();
+          selectedSmokingHabit = filterData['selectedSmokingHabit'] != null
+              ? SmokingHabit.values.firstWhere(
+                  (sh) => sh.name == filterData['selectedSmokingHabit'])
+              : null;
+          selectedDrinkingHabit = filterData['selectedDrinkingHabit'] != null
+              ? DrinkingHabit.values.firstWhere(
+                  (dh) => dh.name == filterData['selectedDrinkingHabit'])
+              : null;
+          selectedWorkoutHabit = filterData['selectedWorkoutHabit'] != null
+              ? WorkoutHabit.values.firstWhere(
+                  (wh) => wh.name == filterData['selectedWorkoutHabit'])
+              : null;
+          selectedDietaryPreference = filterData['selectedDietaryPreference'] !=
+                  null
+              ? DietaryPreference.values.firstWhere(
+                  (dp) => dp.name == filterData['selectedDietaryPreference'])
+              : null;
+          selectedSleepingHabit = filterData['selectedSleepingHabit'] != null
+              ? SleepingHabit.values.firstWhere(
+                  (sh) => sh.name == filterData['selectedSleepingHabit'])
+              : null;
+          maxDistance = filterData['maxDistance'] as double;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading saved filters: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: true, // Ensure layout adjusts for keyboard
       appBar: AppBar(
         title: Text('Explore'),
-        backgroundColor: Color(0xFF4A148C),
+        backgroundColor:
+            Color(0xFF1A0033), // Match the darkest background color
         actions: [
           IconButton(
             icon: Icon(Icons.filter_list),
@@ -189,8 +380,8 @@ class _ExploreScreenState extends State<ExploreScreen>
                                 decoration: BoxDecoration(
                                   gradient: LinearGradient(
                                     colors: [
-                                      Color(0xFF4A148C),
-                                      Color(0xFF7B1FA2)
+                                      Color(0xFF1A0033),
+                                      Color(0xFF2D0A4F)
                                     ],
                                     begin: Alignment.topCenter,
                                     end: Alignment.bottomCenter,
@@ -214,6 +405,42 @@ class _ExploreScreenState extends State<ExploreScreen>
                                         CrossAxisAlignment.start,
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
+                                      ElevatedButton(
+                                        onPressed: _saveFilter,
+                                        child: Text('Save Filter'),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Color(0xFF6A0DAD),
+                                          foregroundColor: Colors.white,
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(20),
+                                          ),
+                                          padding: EdgeInsets.symmetric(
+                                              horizontal: 16, vertical: 12),
+                                          elevation: 4,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Distance (km)',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                          fontFamily: 'FuturisticFont',
+                                        ),
+                                      ),
+                                      Slider(
+                                        value: maxDistance,
+                                        min: 1,
+                                        max: 100,
+                                        divisions: 99,
+                                        label: '${maxDistance.toInt()} km',
+                                        onChanged: (value) {
+                                          setState(() {
+                                            maxDistance = value;
+                                          });
+                                        },
+                                      ),
                                       Text(
                                         'Gender',
                                         style: TextStyle(
@@ -640,7 +867,8 @@ class _ExploreScreenState extends State<ExploreScreen>
                                 bottom: 16,
                                 right: 16,
                                 child: FloatingActionButton(
-                                  backgroundColor: Color(0xFF4A148C),
+                                  backgroundColor: Color(
+                                      0xFF6A0DAD), // Brighter purple button
                                   onPressed: () {
                                     Navigator.pop(context);
                                     // Trigger a refresh of the user list with the new filters
@@ -677,7 +905,11 @@ class _ExploreScreenState extends State<ExploreScreen>
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xFF4A148C), Color(0xFF7B1FA2), Color(0xFFAB47BC)],
+            colors: [
+              Color(0xFF1A0033), // Darker deep purple
+              Color(0xFF2D0A4F), // Darker mid purple
+              Color(0xFF3B1064), // Darker light purple
+            ],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
@@ -692,7 +924,8 @@ class _ExploreScreenState extends State<ExploreScreen>
               if (!_isApiAvailable)
                 Container(
                   padding: EdgeInsets.symmetric(vertical: 6, horizontal: 12),
-                  color: Colors.orange.withOpacity(0.8),
+                  color: Colors.deepOrange.withOpacity(
+                      0.7), // Darker orange that stands out on dark background
                   child: Row(
                     children: [
                       Icon(Icons.warning_amber_rounded,
@@ -760,13 +993,15 @@ class _ExploreScreenState extends State<ExploreScreen>
                                   selectedWorkoutHabit = null;
                                   selectedDietaryPreference = null;
                                   selectedSleepingHabit = null;
+                                  maxDistance = 50;
                                 });
                                 _loadUsers();
                               },
                               icon: Icon(Icons.refresh),
                               label: Text('Reset Filters'),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Color(0xFF7B1FA2),
+                                backgroundColor: Color(
+                                    0xFF6A0DAD), // Brighter purple for better visibility
                                 foregroundColor: Colors.white,
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(20),
@@ -833,8 +1068,8 @@ class _ExploreScreenState extends State<ExploreScreen>
                                   borderRadius: BorderRadius.circular(12),
                                   gradient: LinearGradient(
                                     colors: [
-                                      Color(0xFF4A148C).withOpacity(0.7),
-                                      Color(0xFF7B1FA2).withOpacity(0.7),
+                                      Color(0xFF1A0033).withOpacity(0.9),
+                                      Color(0xFF2D0A4F).withOpacity(0.9),
                                     ],
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
@@ -877,7 +1112,7 @@ class _ExploreScreenState extends State<ExploreScreen>
                                                     if (loadingProgress == null)
                                                       return child;
                                                     return Container(
-                                                      color: Color(0xFF4A148C),
+                                                      color: Color(0xFF1A0033),
                                                       child: Center(
                                                         child:
                                                             CircularProgressIndicator(
@@ -901,7 +1136,7 @@ class _ExploreScreenState extends State<ExploreScreen>
                                                   errorBuilder: (context, error,
                                                       stackTrace) {
                                                     return Container(
-                                                      color: Color(0xFF4A148C),
+                                                      color: Color(0xFF1A0033),
                                                       child: Icon(
                                                         Icons.person,
                                                         size: 80,
@@ -911,7 +1146,7 @@ class _ExploreScreenState extends State<ExploreScreen>
                                                   },
                                                 )
                                               : Container(
-                                                  color: Color(0xFF4A148C),
+                                                  color: Color(0xFF1A0033),
                                                   child: Icon(
                                                     Icons.person,
                                                     size: 80,
@@ -1264,6 +1499,13 @@ class _ExploreScreenState extends State<ExploreScreen>
     }
     if (selectedSleepingHabit != null) {
       params['sleepingHabit'] = selectedSleepingHabit!.name;
+    }
+
+    // Add proximity-based filtering parameters
+    if (userLatitude != null && userLongitude != null) {
+      params['latitude'] = userLatitude;
+      params['longitude'] = userLongitude;
+      params['maxDistance'] = maxDistance.toInt();
     }
 
     return params;
