@@ -12,6 +12,7 @@ const config_1 = require("@nestjs/config");
 const typeorm_1 = require("@nestjs/typeorm");
 const explore_module_1 = require("./explore/explore.module");
 const filters_module_1 = require("./filters/filters.module");
+const environment_config_1 = require("./config/environment.config");
 let AppModule = class AppModule {
 };
 exports.AppModule = AppModule;
@@ -20,17 +21,9 @@ exports.AppModule = AppModule = __decorate([
         imports: [
             config_1.ConfigModule.forRoot({
                 isGlobal: true,
+                envFilePath: process.env.NODE_ENV === 'production' ? '.env.production' : '.env',
             }),
-            typeorm_1.TypeOrmModule.forRoot({
-                type: 'postgres',
-                host: process.env.DB_HOST || 'localhost',
-                port: parseInt(process.env.DB_PORT, 10) || 5432,
-                username: process.env.DB_USERNAME || 'postgres',
-                password: process.env.DB_PASSWORD || 'postgres',
-                database: process.env.DB_NAME || 'concord',
-                autoLoadEntities: true,
-                synchronize: true,
-            }),
+            typeorm_1.TypeOrmModule.forRoot((0, environment_config_1.getDatabaseConfig)()),
             explore_module_1.ExploreModule,
             filters_module_1.FiltersModule,
         ],

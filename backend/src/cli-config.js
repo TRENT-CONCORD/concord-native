@@ -38,6 +38,22 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const dotenv = __importStar(require("dotenv"));
 const path = __importStar(require("path"));
+const fs = __importStar(require("fs"));
 const data_source_1 = __importDefault(require("./data-source"));
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+// Determine which environment we're in
+const nodeEnv = process.env.NODE_ENV || 'development';
+console.log(`CLI current environment: ${nodeEnv}`);
+// Load the appropriate .env file
+const envFile = nodeEnv === 'production' ? '.env.production' : '.env';
+const envPath = path.resolve(__dirname, `../${envFile}`);
+console.log(`CLI loading environment from: ${envPath}`);
+console.log(`File exists: ${fs.existsSync(envPath)}`);
+dotenv.config({ path: envPath });
+// Log the configuration being used
+console.log('Environment Variables in CLI:', {
+    environment: nodeEnv,
+    host: process.env.TYPEORM_HOST,
+    username: process.env.TYPEORM_USERNAME,
+    database: process.env.TYPEORM_DATABASE,
+});
 exports.default = data_source_1.default;

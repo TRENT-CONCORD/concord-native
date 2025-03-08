@@ -1,38 +1,69 @@
-import { DataSource } from 'typeorm';
+import "reflect-metadata";
+import { DataSource } from "typeorm";
 import * as dotenv from 'dotenv';
 import * as path from 'path';
+import * as fs from 'fs';
 
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+// Determine which environment we're in
+const nodeEnv = process.env.NODE_ENV || 'development';
+console.log(`Current environment: ${nodeEnv}`);
+
+// Load the appropriate .env file
+const envFile = nodeEnv === 'production' ? '.env.production' : '.env';
+const envPath = path.resolve(__dirname, `../${envFile}`);
+console.log(`Loading environment from: ${envPath}`);
+console.log(`File exists: ${fs.existsSync(envPath)}`);
+dotenv.config({ path: envPath });
+
+// Configuration for different environments
+const dbConfig = {
+  development: {
+    host: process.env.TYPEORM_HOST || 'concord-dev-db.postgres.database.azure.com',
+    port: parseInt(process.env.TYPEORM_PORT || '5432'),
+    username: process.env.TYPEORM_USERNAME || 'concordadmindev',
+    password: process.env.TYPEORM_PASSWORD || 'Jhvaj8zZrGm4',
+    database: process.env.TYPEORM_DATABASE || 'concord_dev',
+    synchronize: process.env.TYPEORM_SYNCHRONIZE === 'true' || false,
+    logging: process.env.TYPEORM_LOGGING === 'true' || true,
+  },
+  production: {
+    host: process.env.TYPEORM_HOST || 'concord-api.postgres.database.azure.com',
+    port: parseInt(process.env.TYPEORM_PORT || '5432'),
+    username: process.env.TYPEORM_USERNAME || 'concordadmin',
+    password: process.env.TYPEORM_PASSWORD || '',  // Always use env variable for production password
+    database: process.env.TYPEORM_DATABASE || 'concord',
+    synchronize: false, // Never auto-synchronize in production
+    logging: process.env.TYPEORM_LOGGING === 'true' || false,
+  }
+};
+
+// Select the configuration based on environment
+const config = nodeEnv === 'production' ? dbConfig.production : dbConfig.development;
+
+// Debug log to check the loaded configuration
+console.log('Database Config:', {
+  environment: nodeEnv,
+  host: config.host,
+  username: config.username,
+  database: config.database,
+  // Don't log the password
+});
 
 const AppDataSource = new DataSource({
-  type: 'postgres',
-  host: process.env.TYPEORM_HOST,
-  port: parseInt(process.env.TYPEORM_PORT || '5432', 10),
-  username: process.env.TYPEORM_USERNAME,
-  password: String(process.env.TYPEORM_PASSWORD),
-  database: process.env.TYPEORM_DATABASE,
-  synchronize: process.env.TYPEORM_SYNCHRONIZE === 'true',
-  logging: process.env.TYPEORM_LOGGING === 'true',
-  entities: ['src/**/*.entity{.ts,.js}'],
-  migrations: ['src/migrations/*{.ts,.js}'],
-  subscribers: ['src/subscriber/**/*{.ts,.js}'],
+  type: "postgres",
+  host: config.host,
+  port: config.port,
+  username: config.username,
+  password: config.password,
+  database: config.database,
+  synchronize: config.synchronize,
+  logging: config.logging,
+  entities: ["src/models/**/*.entity.ts", "src/explore/models/**/*.entity.ts"],
+  migrations: ["src/migrations/**/*.ts"],
+  subscribers: ["src/subscriber/**/*.ts"],
   ssl: {
-    rejectUnauthorized: false,
+    rejectUnauthorized: true
   }
-});
-
-console.log('Environment Variables:', {
-  host: process.env.TYPEORM_HOST,
-  username: process.env.TYPEORM_USERNAME,
-  password: process.env.TYPEORM_PASSWORD,
-  database: process.env.TYPEORM_DATABASE,
-});
-
-console.log('Database Config:', {
-  host: process.env.TYPEORM_HOST,
-  username: process.env.TYPEORM_USERNAME,
-  password: process.env.TYPEORM_PASSWORD,
-  database: process.env.TYPEORM_DATABASE,
 });
 
 export default AppDataSource; 
